@@ -1,1 +1,235 @@
-1
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6fe4">
+<title>摩托罗拉寻呼发射器 · 单呼</title>
+<style>
+:root{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#eef2f8;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --bad:#d93b3b; --bad-bg:#fff0f0;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+    --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+    --bad:#ff6b6b; --bad-bg:#2a1c1c;
+  }
+}
+html[data-theme=light]{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#eef2f8;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --bad:#d93b3b; --bad-bg:#fff0f0;
+}
+html[data-theme=dark]{
+  --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+  --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+  --bad:#ff6b6b; --bad-bg:#2a1c1c;
+}
+*{box-sizing:border-box;-webkit-text-size-adjust:100%}
+body{margin:0;padding:0 10px calc(84px + env(safe-area-inset-bottom));background:var(--bg);color:var(--tx);
+     font:16px/1.6 "Microsoft YaHei","PingFang SC","Heiti SC",sans-serif;transition:background .2s}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:20px;margin:10px 0 2px;text-align:center;color:var(--pri)}
+.sub{text-align:center;color:var(--tx2);font-size:12px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;
+      box-shadow:0 1px 3px rgba(20,60,120,.05)}
+.card h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--line2);color:var(--pri)}
+.card h2 .tgl{float:right;background:none;border:0;color:var(--tx2);font-size:18px;cursor:pointer;padding:0 4px;line-height:1}
+.fld{margin-bottom:10px}
+.fld .lb{display:block;font-size:13px;color:var(--tx2);margin-bottom:4px}
+input[type=text],select,textarea{width:100%;border:1px solid var(--line);border-radius:7px;padding:10px;
+     background:var(--card);color:var(--tx);font:inherit;font-size:16px}
+input.bad,textarea.bad{border-color:var(--bad);background:var(--bad-bg)}
+textarea{min-height:110px;resize:vertical;line-height:1.5}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:12px 14px;font:inherit;font-size:16px;width:100%;cursor:pointer}
+button:active{background:var(--pri-d)}
+button:disabled{background:var(--tx2);opacity:.6;cursor:default}
+button.ghost{background:var(--card);color:var(--pri);border:1px solid var(--pri);padding:11px 8px;font-size:15px}
+.btnrow{display:flex;gap:8px;margin-top:10px}
+.btnrow button{flex:1}
+.tip{font-size:12px;color:var(--tx2);margin-top:6px}
+.nav{display:flex;gap:8px;margin:12px 0}
+.nav a{flex:1;text-align:center;text-decoration:none;background:var(--card);color:var(--pri);
+       border:1px solid var(--pri);border-radius:8px;padding:10px 4px;font-size:15px}
+table.kv{width:100%;border-collapse:collapse;font-size:14px}
+table.kv td{padding:4px 6px;border-bottom:1px solid var(--line2);text-align:center}
+table.kv td:first-child{text-align:left;color:var(--tx2)}
+#st{margin-top:8px;font-size:14px;color:var(--pri);min-height:22px}
+.prog{display:none;height:8px;background:var(--line2);border-radius:4px;overflow:hidden;margin-top:8px}
+.prog i{display:block;height:100%;width:0;background:var(--pri);transition:width .3s}
+.banner{display:none;background:#fff5e6;border:1px solid #ffcf8b;color:#8a5a00;
+        border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:12px}
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:9;background:var(--card);
+      border-top:1px solid var(--line);padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+      box-shadow:0 -2px 10px rgba(20,60,120,.08)}
+.dock .in{max-width:760px;margin:0 auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>摩托罗拉寻呼发射器</h1>
+  <p class="sub">WIFI 模块控制 · 单呼 / 直接发送</p>
+
+  <div class="banner" id="banner">未能读取设备配置，显示的是页面默认值。</div>
+
+  <div class="card">
+    <h2>发射参数<button type="button" class="tgl" id="theme" title="切换深色/浅色">◐</button></h2>
+    <form action="" method="POST" target="form_iframe" id="f1">
+      <div class="fld">
+        <span class="lb">频率（MHz）</span>
+        <input type="text" name="r_freq" id="r_freq" value="152.8250" maxlength="8" inputmode="decimal" autocomplete="off">
+        <div class="tip">范围 136.0000 - 174.0000，必须精确到小数点后四位</div>
+      </div>
+      <div class="fld">
+        <span class="lb">地址码</span>
+        <input type="text" name="r_addr" id="r_addr" value="1234567" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <div class="tip">7 位数字，范围 0000001 - 2097151</div>
+      </div>
+      <div class="grid2">
+        <div class="fld">
+          <span class="lb">相位</span>
+          <select name="r_phase" id="r_phase">
+            <option value="P">正相位</option><option value="N">负相位</option>
+          </select>
+        </div>
+        <div class="fld">
+          <span class="lb">速率（bit/s）</span>
+          <select name="r_rate" id="r_rate">
+            <option value="L">512</option><option value="H" selected>1200</option><option value="S">2400</option>
+          </select>
+        </div>
+        <div class="fld">
+          <span class="lb">呼机类型</span>
+          <select name="r_type" id="r_type">
+            <option value="N">数字机</option><option value="T" selected>汉字机</option>
+          </select>
+        </div>
+        <div class="fld">
+          <span class="lb">响声（功能位）</span>
+          <select name="r_beep" id="r_beep">
+            <option value="0">0</option><option value="1">1</option>
+            <option value="2">2</option><option value="3">3</option>
+          </select>
+        </div>
+      </div>
+      <div class="fld">
+        <span class="lb">消息内容 <span id="cc" style="float:right;color:var(--tx2)">0 字节</span></span>
+        <textarea name="r_message" id="r_message" maxlength="120" placeholder="在此输入消息内容，最多 120 个字符"></textarea>
+        <div class="tip" id="est">STM32 串口缓冲区共 400 字节，汉字按 GB18030 双字节计算，请控制在 120 字符以内</div>
+      </div>
+      <div class="prog" id="prog"><i id="pfill"></i></div>
+      <div id="st"></div>
+    </form>
+    <iframe id="form_iframe" name="form_iframe" style="display:none;"></iframe>
+  </div>
+
+  <div class="card">
+    <h2>数字机字符对照</h2>
+    <table class="kv">
+      <tr><td>A</td><td>→ 换行</td><td>B / U</td><td>→ U</td></tr>
+      <tr><td>C / 空格</td><td>→ 空格</td><td>D / -</td><td>→ -</td></tr>
+      <tr><td>E / [</td><td>→ [</td><td>F / ]</td><td>→ ]</td></tr>
+    </table>
+    <div class="tip">数字机只认 0-9 与 A-F，其余字符会被当作数字处理。</div>
+  </div>
+
+  <div class="nav">
+    <a href="group_call">群呼 / 天气推送</a>
+    <a href="wifi">配置 Wifi</a>
+    <a href="webupdate">固件升级</a>
+  </div>
+</div>
+
+<div class="dock"><div class="in">
+  <button type="button" id="btn_send">发送消息</button>
+</div></div>
+
+<script>
+function $(id){return document.getElementById(id);}
+(function(){
+  var t=null;try{t=localStorage.getItem("pocsag-theme");}catch(e){}
+  if(t)document.documentElement.setAttribute("data-theme",t);
+  $("theme").onclick=function(){
+    var cur=document.documentElement.getAttribute("data-theme");
+    if(!cur)cur=matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light";
+    var nx=cur==="dark"?"light":"dark";
+    document.documentElement.setAttribute("data-theme",nx);
+    try{localStorage.setItem("pocsag-theme",nx);}catch(e){}
+  };
+})();
+
+function gbLen(s){var n=0;for(var i=0;i<s.length;i++)n+=s.charCodeAt(i)>0x7F?2:1;return n;}
+function estMs(rate,bytes,hanzi){
+  var bps=rate==="L"?512:rate==="H"?1200:2400;
+  var cw=hanzi?Math.ceil(bytes/2):Math.ceil(bytes/5);
+  var batches=Math.ceil((1+cw+1)/16);
+  return (576+batches*544+64)*1000/bps;
+}
+function check(){
+  var f=$("r_freq").value.trim(),a=$("r_addr").value.trim();
+  var fok=/^\d{3}\.\d{4}$/.test(f)&&parseFloat(f)>=136&&parseFloat(f)<=174;
+  var aok=/^\d{1,7}$/.test(a)&&parseInt(a,10)>=1&&parseInt(a,10)<=2097151;
+  $("r_freq").className=fok?"":"bad";
+  $("r_addr").className=aok?"":"bad";
+  var nb=gbLen($("r_message").value);
+  $("cc").textContent=nb+" 字节";
+  var ms=estMs($("r_rate").value,nb,$("r_type").value==="T");
+  $("est").innerHTML="STM32 串口缓冲区共 400 字节，请控制在 120 字符以内。"+
+    "本条发射约需 <b>"+(ms/1000).toFixed(1)+"</b> 秒（"+(nb>240?'<span style="color:var(--bad)">超出 400 字节上限</span>':nb+" 字节")+"）";
+  return fok&&aok;
+}
+function loadCfg(){
+  fetch("cfg").then(function(r){return r.json();}).then(function(c){
+    if(!c||!c.pg){$("banner").style.display="block";return;}
+    var p=c.pg[0]||{};
+    if(p.f)$("r_freq").value=p.f;
+    if(p.a)$("r_addr").value=p.a;
+    if(p.r)$("r_rate").value=p.r;
+    if(p.p)$("r_phase").value=p.p;
+    if(c.type)$("r_type").value=c.type;
+    if(c.beep)$("r_beep").value=c.beep;
+    check();
+  }).catch(function(){$("banner").style.display="block";});
+}
+var pollTimer=null;
+function txDone(){
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(poll,500);poll();
+}
+function poll(){
+  fetch("status").then(function(r){return r.json();}).then(function(s){
+    var t=s.total||0,d=s.done||0;
+    if(s.q>0){
+      $("prog").style.display="block";
+      $("pfill").style.width=(t?Math.round(d*100/t):0)+"%";
+      $("st").innerHTML="发送中 "+d+"/"+t+(s.rem>0?("，还需 "+(s.rem/1000).toFixed(1)+"s"):"");
+    }else{
+      $("prog").style.display="none";
+      $("st").innerHTML="发送完成";
+      if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+    }
+  }).catch(function(){});
+}
+["r_freq","r_addr","r_message"].forEach(function(k){$(k).addEventListener("input",check);});
+["r_rate","r_type"].forEach(function(k){$(k).addEventListener("change",check);});
+function trySubmit(){
+  if(!check()){$("st").innerHTML='<span style="color:var(--bad)">频率或地址码不合法</span>';return false;}
+  $("btn_send").disabled=true;
+  setTimeout(function(){$("btn_send").disabled=false;},2000);
+  setTimeout(txDone,400);
+  return true;
+}
+$("f1").addEventListener("submit",function(e){ if(!trySubmit())e.preventDefault(); });
+$("btn_send").onclick=function(){
+  var f=$("f1");
+  if(f.requestSubmit){f.requestSubmit();return;}
+  if(trySubmit())f.submit();
+};
+check();loadCfg();
+</script>
+</body>
+</html>

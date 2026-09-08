@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6fe4">
+<title>摩托罗拉寻呼发射器 · 群呼</title>
+<style>
+:root{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#e8eef6;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --ok:#1a8f4c; --bad:#d93b3b; --bad-bg:#fff0f0;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+    --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+    --ok:#3ecf7a; --bad:#ff6b6b; --bad-bg:#2a1c1c;
+  }
+}
+html[data-theme=light]{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#e8eef6;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --ok:#1a8f4c; --bad:#d93b3b; --bad-bg:#fff0f0;
+}
+html[data-theme=dark]{
+  --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+  --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+  --ok:#3ecf7a; --bad:#ff6b6b; --bad-bg:#2a1c1c;
+}
+*{box-sizing:border-box;-webkit-text-size-adjust:100%}
+body{margin:0;padding:0 10px calc(96px + env(safe-area-inset-bottom));background:var(--bg);color:var(--tx);
+     font:16px/1.6 "Microsoft YaHei","PingFang SC","Heiti SC",sans-serif;transition:background .2s}
+.wrap{max-width:820px;margin:0 auto}
+h1{font-size:20px;margin:10px 0 2px;text-align:center;color:var(--pri)}
+.sub{text-align:center;color:var(--tx2);font-size:12px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;
+      box-shadow:0 1px 3px rgba(20,60,120,.05)}
+.card h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--line2);color:var(--pri)}
+.card h2 small{float:right;font-weight:400;font-size:12px;color:var(--tx2)}
+
+/* ---- 顶部摘要条：勾选了哪些、要发多久，一眼看到 ---- */
+.sum{position:sticky;top:0;z-index:5;background:var(--card);border:1px solid var(--line);
+     border-radius:10px;padding:9px 12px;margin-bottom:12px;display:flex;align-items:center;
+     gap:10px;font-size:14px;box-shadow:0 2px 8px rgba(20,60,120,.08)}
+.sum b{color:var(--pri);font-size:16px}
+.sum .sp{flex:1}
+.sum .tgl{background:none;border:0;color:var(--tx2);font-size:18px;cursor:pointer;padding:2px 6px;line-height:1}
+
+input[type=text],select,textarea{width:100%;border:1px solid var(--line);border-radius:7px;padding:9px 8px;
+     background:var(--card);color:var(--tx);font:inherit;font-size:16px}
+input.bad,textarea.bad{border-color:var(--bad);background:var(--bad-bg)}
+textarea{min-height:96px;resize:vertical;line-height:1.5}
+button{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:12px 14px;font:inherit;font-size:16px;width:100%;cursor:pointer}
+button:active{background:var(--pri-d)}
+button:disabled{background:var(--tx2);opacity:.6;cursor:default}
+button.ghost{background:var(--card);color:var(--pri);border:1px solid var(--pri);padding:10px 6px;font-size:14px}
+.btnrow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btnrow button{flex:1;min-width:96px}
+.tip{font-size:12px;color:var(--tx2);margin-top:6px;line-height:1.6}
+.banner{display:none;background:#fff5e6;border:1px solid #ffcf8b;color:#8a5a00;
+        border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:12px}
+
+/* ---- 10 路列表：手机 6 列网格，宽屏 7 列表格 ---- */
+.thead{display:none;grid-template-columns:52px 46px 1.55fr 1.3fr 1fr 1.05fr 56px;gap:8px;
+       padding:0 2px 8px;font-size:13px;color:var(--tx2);border-bottom:1px solid var(--line2)}
+.row{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end;
+     padding:10px 0;border-bottom:1px dashed var(--line2)}
+.row.odd{background:linear-gradient(90deg,transparent,rgba(47,111,228,.04),transparent)}
+.row .lb{display:block;font-size:12px;color:var(--tx2);margin-bottom:4px;font-style:normal;font-weight:400}
+.c-chk{grid-column:span 2;order:1;display:flex;align-items:center;gap:6px;padding-bottom:6px}
+.c-wxc{grid-column:span 2;order:2;display:flex;align-items:center;gap:6px;padding-bottom:6px}
+.c-seq{grid-column:span 2;order:3;display:flex;align-items:center;gap:6px;padding-bottom:6px;font-size:14px;color:var(--tx2)}
+.c-frq{grid-column:span 3;order:4}
+.c-adr{grid-column:span 3;order:5}
+.c-rat{grid-column:span 3;order:6}
+.c-pha{grid-column:span 3;order:7}
+.c-seq b{font-size:17px;color:var(--tx);font-weight:700}
+.c-chk input[type=checkbox],.c-wxc input[type=checkbox]{width:22px;height:22px;flex:none;margin:0;accent-color:var(--pri)}
+.c-chk span,.c-wxc .lb{font-size:14px;color:var(--tx)}
+.c-frq input,.c-adr input{font-variant-numeric:tabular-nums}
+@media (min-width:660px){
+  .thead{display:grid}
+  .row{grid-template-columns:52px 46px 1.55fr 1.3fr 1fr 1.05fr 56px;align-items:center}
+  .row>span{order:0}
+  .row .lb{display:none}
+  .c-chk,.c-wxc,.c-seq,.c-frq,.c-adr,.c-rat,.c-pha{grid-column:auto;display:block;padding-bottom:0}
+  .c-seq{font-size:15px}
+  .c-wxc{text-align:center}
+}
+.tools{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.tools button{flex:1;min-width:104px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fld{margin-bottom:10px}
+.fld .lb{display:block;font-size:13px;color:var(--tx2);margin-bottom:4px}
+.chkline{display:flex;align-items:center;gap:8px;min-height:42px;border:1px solid var(--line);
+         border-radius:7px;padding:0 10px;font-size:14px}
+.chkline input[type=checkbox]{width:20px;height:20px;accent-color:var(--pri);margin:0}
+#wxp{margin-top:10px;padding:10px;background:var(--pri-bg);border:1px dashed var(--line);border-radius:8px;
+     font-size:15px;color:var(--pri);min-height:44px;word-break:break-all}
+#st{margin-top:8px;font-size:14px;color:var(--pri);min-height:22px}
+.prog{display:none;height:8px;background:var(--line2);border-radius:4px;overflow:hidden;margin-top:8px}
+.prog i{display:block;height:100%;width:0;background:var(--pri);transition:width .3s}
+.nav{display:flex;gap:8px;margin:12px 0}
+.nav a{flex:1;text-align:center;text-decoration:none;background:var(--card);color:var(--pri);
+       border:1px solid var(--pri);border-radius:8px;padding:10px 4px;font-size:15px}
+
+/* ---- 底部常驻操作栏：手机上不用滚到底才能发 ---- */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:9;background:var(--card);
+      border-top:1px solid var(--line);padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+      box-shadow:0 -2px 10px rgba(20,60,120,.08)}
+.dock .in{max-width:820px;margin:0 auto;display:flex;gap:8px;align-items:center}
+.dock button{margin:0}
+.dock .ghost{width:110px;flex:none}
+.timeslots{display:flex;flex-direction:column;gap:8px}
+.tslot{display:flex;align-items:center;gap:8px}
+.tslot .chkline{margin:0;flex:0 0 auto}
+.tslot input[type=time]{flex:1 1 auto;min-width:0}
+.tslot input[type=time]:disabled{opacity:.45}
+@media(min-width:560px){.timeslots{flex-direction:row}.tslot{flex:1 1 0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>摩托罗拉寻呼发射器</h1>
+  <p class="sub">WIFI 模块控制 · 10 路群呼 / 天气推送</p>
+
+  <div class="banner" id="banner">未能读取设备配置，当前显示的是页面默认值。</div>
+
+  <div class="sum">
+    <span>已选 <b id="s_sel">0</b> 行</span>
+    <span>天气 <b id="s_wx">0</b> 行</span>
+    <span class="sp"></span>
+    <span id="s_time" style="color:var(--tx2)">预计 —</span>
+    <button type="button" class="tgl" id="theme" title="切换深色/浅色">◐</button>
+  </div>
+
+  <!-- ================= 群呼列表 ================= -->
+  <form action="" method="POST" target="form_iframe" id="f_group">
+  <div class="card">
+    <h2>群呼列表<small>勾选后参与发送</small></h2>
+      <div class="thead">
+        <span>发送</span><span>序号</span><span>频率(MHz)</span><span>地址码</span><span>速率</span><span>相位</span><span>天气</span>
+      </div>
+
+      <div class="row">
+        <span class="c-chk"><input type="checkbox" name="sel" value="0"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>01</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f0" id="f0" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a0" id="a0" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r0" id="r0"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p0" id="p0"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="0"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row odd">
+        <span class="c-chk"><input type="checkbox" name="sel" value="1"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>02</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f1" id="f1" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a1" id="a1" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r1" id="r1"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p1" id="p1"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="1"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row">
+        <span class="c-chk"><input type="checkbox" name="sel" value="2"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>03</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f2" id="f2" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a2" id="a2" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r2" id="r2"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p2" id="p2"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="2"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row odd">
+        <span class="c-chk"><input type="checkbox" name="sel" value="3"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>04</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f3" id="f3" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a3" id="a3" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r3" id="r3"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p3" id="p3"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="3"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row">
+        <span class="c-chk"><input type="checkbox" name="sel" value="4"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>05</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f4" id="f4" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a4" id="a4" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r4" id="r4"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p4" id="p4"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="4"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row odd">
+        <span class="c-chk"><input type="checkbox" name="sel" value="5"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>06</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f5" id="f5" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a5" id="a5" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r5" id="r5"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p5" id="p5"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="5"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row">
+        <span class="c-chk"><input type="checkbox" name="sel" value="6"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>07</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f6" id="f6" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a6" id="a6" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r6" id="r6"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p6" id="p6"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="6"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row odd">
+        <span class="c-chk"><input type="checkbox" name="sel" value="7"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>08</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f7" id="f7" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a7" id="a7" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r7" id="r7"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p7" id="p7"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="7"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row">
+        <span class="c-chk"><input type="checkbox" name="sel" value="8"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>09</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f8" id="f8" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a8" id="a8" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r8" id="r8"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p8" id="p8"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="8"><i class="lb">天气推送</i></span>
+      </div>
+      <div class="row odd">
+        <span class="c-chk"><input type="checkbox" name="sel" value="9"><span>发送</span></span>
+        <span class="c-seq"><span>序号</span><b>10</b></span>
+        <span class="c-frq"><i class="lb">频率(MHz)</i><input type="text" name="f9" id="f9" maxlength="8" inputmode="decimal" autocomplete="off"></span>
+        <span class="c-adr"><i class="lb">地址码</i><input type="text" name="a9" id="a9" maxlength="7" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></span>
+        <span class="c-rat"><i class="lb">速率</i><select name="r9" id="r9"><option value="L">512</option><option value="H">1200</option><option value="S">2400</option></select></span>
+        <span class="c-pha"><i class="lb">相位</i><select name="p9" id="p9"><option value="P">正相位</option><option value="N">负相位</option></select></span>
+        <span class="c-wxc"><input type="checkbox" name="wx" value="9"><i class="lb">天气推送</i></span>
+      </div>
+
+      <div class="tools">
+        <button type="button" class="ghost" onclick="selAll(1)">全选发送</button>
+        <button type="button" class="ghost" onclick="selAll(0)">全不选</button>
+        <button type="button" class="ghost" onclick="selAll(2)">反选</button>
+        <button type="button" class="ghost" onclick="wxAll(1)">全选天气</button>
+        <button type="button" class="ghost" onclick="wxAll(0)">清空天气</button>
+      </div>
+  </div>
+
+    <!-- ================= 消息与全局参数 ================= -->
+    <div class="card">
+      <h2>消息与全局参数</h2>
+      <div class="fld">
+        <span class="lb">消息内容 <span id="cc" style="float:right;color:var(--tx2)">0 字节</span></span>
+        <textarea name="r_message" id="r_message" maxlength="120" placeholder="在此输入消息内容，最多 120 个字符"></textarea>
+      </div>
+      <div class="grid2">
+        <div class="fld">
+          <span class="lb">呼机类型</span>
+          <select name="r_type" id="r_type"><option value="N">数字机</option><option value="T">汉字机</option></select>
+        </div>
+        <div class="fld">
+          <span class="lb">响声（功能位）</span>
+          <select name="r_beep" id="r_beep"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+        </div>
+      </div>
+
+      <div class="fld">
+        <span class="lb">发送间隔</span>
+        <label class="chkline"><input type="checkbox" id="adg" name="adg" checked><span>自适应间隔（按消息长度自动计算，快 2~6 倍）</span></label>
+      </div>
+      <div class="fld" id="gapfld" style="display:none">
+        <span class="lb">固定间隔（毫秒）</span>
+        <input type="text" name="r_gap" id="r_gap" value="8000" maxlength="5" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <div class="tip">关闭自适应时生效。必须大于单条消息的实际发射时间，太小会打断上一条。</div>
+      </div>
+      <div class="fld">
+        <label class="chkline"><input type="checkbox" id="gfr" name="gfr" checked><span>同频归组（相同频率的行连着发，少切几次频）</span></label>
+      </div>
+      <div class="tip" id="est"></div>
+      <div class="prog" id="prog"><i id="pfill"></i></div>
+      <div id="st"></div>
+    </div>
+  </form>
+  <iframe id="form_iframe" name="form_iframe" style="display:none;"></iframe>
+
+  <!-- ================= 天气推送 ================= -->
+  <div class="card">
+    <h2>天气推送<small>需先连接可上网的 Wifi</small></h2>
+    <div class="tip" id="wsta" style="margin:-4px 0 10px"></div>
+    <div class="fld">
+      <span class="lb">数据源</span>
+      <select name="wsrc" id="wsrc" onchange="srcHint()">
+        <option value="0">Open-Meteo（免 Key，服务器在境外）</option>
+        <option value="1">心知天气 Seniverse（需 Key，国内稳定）</option>
+        <option value="2">和风天气 Qweather（需 Key，国内稳定）</option>
+      </select>
+    </div>
+    <div class="fld">
+      <span class="lb">API Key</span>
+      <input type="text" name="wkey" id="wkey" maxlength="39" autocomplete="off" placeholder="免 Key 源可留空">
+    </div>
+    <div class="fld">
+      <span class="lb">城市 / 位置</span>
+      <input type="text" name="wcity" id="wcity" maxlength="31" autocomplete="off">
+      <div class="tip" id="cityHint"></div>
+    </div>
+    <div class="fld">
+      <span class="lb">城市名称（推送时显示）</span>
+      <input type="text" name="wname" id="wname" maxlength="12" autocomplete="off" placeholder="留空则用接口返回的名字">
+      <div class="tip">填了会显示成「<span id="wxdemo">南宁</span> 多云 28℃…」。
+        <b>只有心知天气会回传城市名</b>，Open-Meteo 与和风都不返回 —— 用这两个源时这里必须手动填，
+        留空就不显示城市。<span id="nohint" style="color:var(--bad)"></span><br>
+        仅汉字机会显示，数字机只认数字。</div>
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <span class="lb">每日推送时间</span>
+                <div class="timeslots">
+          <div class="tslot"><label class="chkline"><input type="checkbox" id="won0" name="won0"><span>①</span></label>
+            <input type="time" name="wt0" id="wt0" value="07:30"></div>
+          <div class="tslot"><label class="chkline"><input type="checkbox" id="won1" name="won1"><span>②</span></label>
+            <input type="time" name="wt1" id="wt1" value="12:00"></div>
+          <div class="tslot"><label class="chkline"><input type="checkbox" id="won2" name="won2"><span>③</span></label>
+            <input type="time" name="wt2" id="wt2" value="18:00"></div>
+        </div>
+        <div class="tip" id="duptip" style="color:var(--bad)"></div>
+        <label class="chkline"><input type="checkbox" id="wauto" name="wauto"><span>开启</span></label>
+      </div>
+    </div>
+    <div class="tip">推送目标 = 上方列表里「天气」列被勾选的行（与「发送」列互不干扰）。
+      时间以设备 NTP 时间为准，需先连上可上网的 Wifi。</div>
+    <div class="btnrow">
+      <button type="button" onclick="wxPush()">立即推送天气</button>
+      <button type="button" class="ghost" onclick="wxSave()">保存天气配置</button>
+      <button type="button" class="ghost" onclick="wxPreview()">获取天气预览</button>
+    </div>
+    <div id="wxp">天气预览会显示在这里。</div>
+  </div>
+
+  <div class="nav">
+    <a href="/">返回单呼</a>
+    <a href="wifi">配置 Wifi</a>
+    <a href="webupdate">固件升级</a>
+  </div>
+</div>
+
+<!-- 底部常驻操作栏 -->
+<div class="dock"><div class="in">
+  <button type="button" class="ghost" onclick="cancelTx()">清空队列</button>
+  <button type="button" id="btn_group">开始群呼</button>
+</div></div>
+
+<script>
+function $(id){return document.getElementById(id);}
+
+/* ---------- 主题：跟随系统，也允许手动切 ---------- */
+(function(){
+  var t=null;try{t=localStorage.getItem("pocsag-theme");}catch(e){}
+  if(t)document.documentElement.setAttribute("data-theme",t);
+  $("theme").onclick=function(){
+    var cur=document.documentElement.getAttribute("data-theme");
+    if(!cur)cur=matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light";
+    var nx=cur==="dark"?"light":"dark";
+    document.documentElement.setAttribute("data-theme",nx);
+    try{localStorage.setItem("pocsag-theme",nx);}catch(e){}
+  };
+})();
+
+function HINTS(){
+  return [
+    "填经纬度，格式：纬度,经度，例如 22.8170,108.3665（广西南宁）",
+    "填城市拼音，例如 nanning、beijing、shanghai",
+    "填和风 LocationID，例如 101010100（北京）、101300301（南宁）"
+  ];
+}
+/* ---------- 三个推送时间点 ---------- */
+function slots(){
+  var a=[];
+  for(var i=0;i<3;i++)a.push({t:$("wt"+i),on:$("won"+i)});
+  return a;
+}
+// 未勾选的时间点输入框置灰，并检查是否有重复时间
+function syncSlots(){
+  var a=slots(),seen={},dup=false;
+  a.forEach(function(o){
+    if(o.t)o.t.disabled=!o.on.checked;
+    if(o.on.checked&&o.t){
+      var v=o.t.value;
+      if(seen[v])dup=true; else seen[v]=1;
+    }
+  });
+  var tip=$("duptip");
+  if(tip)tip.textContent=dup?"\u26a0 有重复的时间点，同一分钟只会推送一次":"";
+  return dup;
+}
+function slotQuery(){
+  var q="";
+  slots().forEach(function(o,i){
+    q+="&wt"+i+"="+enc(o.t.value)+"&won"+i+"="+(o.on.checked?"1":"0");
+  });
+  return q;
+}
+slots().forEach(function(o,i){
+  if(o.on)o.on.addEventListener("change",syncSlots);
+  if(o.t)o.t.addEventListener("input",syncSlots);
+});
+
+function srcHint(){
+  var i=parseInt($("wsrc").value,10)||0;
+  $("cityHint").innerHTML=HINTS()[i];
+}
+function boxes(n){return document.getElementsByName(n);}
+function selAll(m){
+  var n=boxes("sel");
+  for(var i=0;i<n.length;i++){
+    if(m===1)n[i].checked=true;else if(m===0)n[i].checked=false;else n[i].checked=!n[i].checked;
+  }
+  refresh();
+}
+function wxAll(m){
+  var n=boxes("wx");
+  for(var i=0;i<n.length;i++)n[i].checked=(m===1);
+  refresh();
+}
+
+/* ---------- 校验与预估 ---------- */
+function gbLen(s){                       // 按 GB18030 算字节数：汉字 2 字节
+  var n=0;for(var i=0;i<s.length;i++)n+=s.charCodeAt(i)>0x7F?2:1;
+  return n;
+}
+function rowFreq(i){return $("f"+i).value.trim();}
+function rowOK(i){
+  var f=rowFreq(i),a=$("a"+i).value.trim();
+  var fok=/^\d{3}\.\d{4}$/.test(f)&&parseFloat(f)>=136&&parseFloat(f)<=174;
+  var aok=/^\d{1,7}$/.test(a)&&parseInt(a,10)>=1&&parseInt(a,10)<=2097151;
+  return {f:fok,a:aok,fv:f,av:a};
+}
+function mark(i){
+  var r=rowOK(i),on=boxes("sel")[i].checked;
+  $("f"+i).className=(on&&r.fv&&!r.f)?"bad":"";
+  $("a"+i).className=(on&&r.av&&!r.a)?"bad":"";
+  return !on||(r.f&&r.a);
+}
+// 单条发射耗时估算，与固件 txEstimateMs() 同一套公式
+function estMs(rate,bytes,hanzi){
+  var bps=rate==="L"?512:rate==="H"?1200:2400;
+  var cw=hanzi?Math.ceil(bytes/2):Math.ceil(bytes/5);
+  var batches=Math.ceil((1+cw+1)/16);
+  return (576+batches*544+64)*1000/bps;
+}
+function fmtSec(ms){
+  var s=Math.round(ms/1000);
+  return s<60?(s+" 秒"):(Math.floor(s/60)+" 分 "+(s%60)+" 秒");
+}
+function refresh(){
+  var seln=0,wxn=0,bad=0;
+  for(var i=0;i<10;i++){
+    if(boxes("sel")[i].checked)seln++;
+    if(boxes("wx")[i].checked)wxn++;
+    if(!mark(i))bad++;
+  }
+  $("s_sel").textContent=seln;
+  $("s_wx").textContent=wxn;
+
+  var msg=$("r_message").value,nb=gbLen(msg);
+  $("cc").textContent=nb+" 字节";
+
+  var hanzi=$("r_type").value==="T",adapt=$("adg").checked,gap=parseInt($("r_gap").value,10)||8000;
+  var total=0,freqs=[];
+  for(var j=0;j<10;j++){
+    if(!boxes("sel")[j].checked)continue;
+    var w=adapt?Math.max(800,estMs($("r"+j).value,nb,hanzi)*1.4+600):gap;
+    total+=w;
+    freqs.push(rowFreq(j));
+  }
+  // 切频开销：同频归组时每个频点只切一次，否则相邻不同就切
+  var sw=0;
+  if(freqs.length){
+    if($("gfr").checked){
+      var seen={},k=0;
+      for(var q=0;q<freqs.length;q++){if(!seen[freqs[q]]){seen[freqs[q]]=1;k++;}}
+      sw=k*400;
+    }else{
+      sw=400;for(var p=1;p<freqs.length;p++)if(freqs[p]!==freqs[p-1])sw+=400;
+    }
+  }
+  total+=sw;
+  $("s_time").textContent=seln?("预计 "+fmtSec(total)):"预计 —";
+  $("est").innerHTML=seln
+    ? "本批 "+seln+" 条，其中切频 "+Math.round(sw/400)+" 次；"+
+      (adapt?"自适应已开启，等待时间按消息长度逐条计算。":"当前用固定间隔 "+gap+" 毫秒。")
+    : "勾选上方的行后，这里会显示预计耗时。";
+  if(bad)$("st").innerHTML='<span style="color:var(--bad)">有 '+bad+' 行参数不合法（红框），已勾选的行请填对再发</span>';
+  else if(!$("st").dataset.lock)$("st").innerHTML="";
+  return bad;
+}
+
+/* ---------- 配置拉取 ---------- */
+function loadCfg(){
+  fetch("cfg").then(function(r){return r.json();}).then(function(c){
+    if(!c||!c.pg){$("banner").style.display="block";return;}
+    for(var i=0;i<10;i++){
+      var p=c.pg[i];if(!p)continue;
+      if(p.f)$("f"+i).value=p.f;
+      if(p.a)$("a"+i).value=p.a;
+      if(p.r)$("r"+i).value=p.r;
+      if(p.p)$("p"+i).value=p.p;
+      if(boxes("sel")[i])boxes("sel")[i].checked=!!p.s;
+      if(boxes("wx")[i])boxes("wx")[i].checked=!!p.w;
+    }
+    if(c.type)$("r_type").value=c.type;
+    if(c.beep)$("r_beep").value=c.beep;
+    if(c.gap)$("r_gap").value=c.gap;
+    if(c.adg!==undefined)$("adg").checked=!!c.adg;
+    if(c.gfr!==undefined)$("gfr").checked=!!c.gfr;
+    if(c.wx){
+      $("wsrc").value=String(c.wx.src);
+      $("wkey").value=c.wx.key||"";
+      $("wcity").value=c.wx.city||"";
+      $("wname").value=c.wx.name||"";
+      if(c.wx.gotcity&&!$("wname").value)$("wname").placeholder="接口返回："+c.wx.gotcity;
+      // 三个推送时间：ts[] 是时间数组，on[] 是各自是否启用
+      if(c.wx.ts&&c.wx.ts.length){
+        for(var i=0;i<3;i++){ if($("wt"+i)&&c.wx.ts[i])$("wt"+i).value=c.wx.ts[i]; }
+      }else if(c.wx.t&&$("wt0")){
+        $("wt0").value=c.wx.t;                 // 兼容只返回单个时间的旧固件
+      }
+      for(var i=0;i<3;i++){
+        var on=$("won"+i);
+        if(on)on.checked=c.wx.on?!!c.wx.on[i]:(i===0);
+      }
+      $("wauto").checked=!!c.wx.auto;
+      syncSlots();
+      if(c.wx.pv)$("wxp").innerHTML=c.wx.pv;
+    }
+    var ws="未连接路由器";
+    if(c.sta&&c.ssid)ws="已连接 "+c.ssid+"（"+c.staip+"）";
+    else if(c.ssid)ws="已保存 "+c.ssid+"，但当前未连上";
+    else ws="未配置路由器，请到「配置 Wifi」页面连接";
+    $("wsta").innerHTML=ws;
+    srcHint();syncGap();refresh();
+  }).catch(function(){$("banner").style.display="block";});
+}
+
+/* ---------- 发送进度 ---------- */
+var pollTimer=null;
+function txDone(){
+  $("st").dataset.lock="1";
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(poll,500);
+  poll();
+}
+function poll(){
+  fetch("status").then(function(r){return r.json();}).then(function(s){
+    var t=s.total||0,d=s.done||0;
+    if(s.q>0){
+      $("prog").style.display="block";
+      $("pfill").style.width=(t?Math.round(d*100/t):0)+"%";
+      var tail=s.rem>0?("，本条还需 "+(s.rem/1000).toFixed(1)+"s"):"";
+      $("st").innerHTML="发送中 "+d+"/"+t+tail;
+    }else{
+      $("prog").style.display="none";
+      $("st").innerHTML="发送完成，共 "+d+" 条";
+      if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+      delete $("st").dataset.lock;
+      refresh();
+    }
+  }).catch(function(){});
+}
+function cancelTx(){
+  fetch("cancel",{method:"POST"}).then(function(){if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+    $("prog").style.display="none";$("st").innerHTML="队列已清空";}).catch(function(){});
+}
+function post(url,body){
+  return fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});
+}
+function enc(v){return encodeURIComponent(v==null?"":v);}
+
+/* ---------- 天气 ---------- */
+function wxSave(){
+  var body="wsrc="+enc($("wsrc").value)+"&wkey="+enc($("wkey").value)+"&wcity="+enc($("wcity").value)+
+           "&wname="+enc($("wname").value)+
+           "&wauto="+($("wauto").checked?"1":"0")+slotQuery();
+  post("wxcfg",body).then(function(){$("wxp").innerHTML="天气配置已保存";}).catch(function(){});
+}
+function wxPreview(){
+  $("wxp").innerHTML="正在获取...";
+  fetch("wxnow").then(function(r){return r.json();}).then(function(w){
+    $("wxp").innerHTML=w.ok?(w.text||""):("获取失败："+(w.err||"未知错误"));
+  }).catch(function(){$("wxp").innerHTML="获取失败，请检查网络连接";});
+}
+function wxPush(){
+  var n=boxes("wx"),c=0;
+  for(var i=0;i<n.length;i++)if(n[i].checked)c++;
+  if(!c){$("wxp").innerHTML="请先在上方列表的「天气」列至少勾选一行";return;}
+  post("wxpush","").then(function(){$("wxp").innerHTML="已触发推送，请看上方状态";txDone();})
+    .catch(function(){$("wxp").innerHTML="推送失败，请检查网络连接";});
+}
+function syncCityDemo(){
+  var v=$("wname").value.trim();
+  $("wxdemo").textContent=v||"南宁";
+  // 只有心知天气会回传城市名，其余两个源不回传 —— 留空就得提醒，
+  // 否则用户看到天气里没有城市，只会以为这个功能坏了
+  var src=parseInt($("wsrc").value,10);
+  $("nohint").textContent=(!v&&src!==1)?"⚠ 当前留空，天气里不会显示城市":"";
+}
+function syncGap(){$("gapfld").style.display=$("adg").checked?"none":"block";}
+
+/* ---------- 绑定 ---------- */
+for(var i=0;i<10;i++){
+  (function(k){
+    $("f"+k).addEventListener("input",refresh);
+    $("a"+k).addEventListener("input",refresh);
+    $("r"+k).addEventListener("change",refresh);
+    boxes("sel")[k].addEventListener("change",refresh);
+    boxes("wx")[k].addEventListener("change",refresh);
+  })(i);
+}
+$("r_message").addEventListener("input",refresh);
+$("r_type").addEventListener("change",refresh);
+$("adg").addEventListener("change",function(){syncGap();refresh();});
+$("gfr").addEventListener("change",refresh);
+$("r_gap").addEventListener("input",refresh);
+
+// 提交前统一校验。底部常驻按钮不依赖 form="" 属性，老浏览器也能用。
+function trySubmit(){
+  var bad=refresh();
+  var seln=parseInt($("s_sel").textContent,10);
+  if(!seln){$("st").innerHTML='<span style="color:var(--bad)">请先勾选要发送的行</span>';return false;}
+  if(bad){$("st").innerHTML='<span style="color:var(--bad)">有 '+bad+' 行参数不合法，请修正红框处</span>';return false;}
+  $("btn_group").disabled=true;
+  setTimeout(function(){$("btn_group").disabled=false;},2500);
+  setTimeout(txDone,400);
+  return true;
+}
+$("f_group").addEventListener("submit",function(e){
+  if(!trySubmit())e.preventDefault();
+});
+$("btn_group").onclick=function(){
+  var f=$("f_group");
+  if(f.requestSubmit){f.requestSubmit();return;}   // 现代浏览器：走 submit 事件的校验
+  if(trySubmit())f.submit();                       // 老浏览器：手动校验后直接提交
+};
+
+$("wname").addEventListener("input",syncCityDemo);
+$("wsrc").addEventListener("change",function(){srcHint();syncCityDemo();});
+syncCityDemo();syncGap();srcHint();loadCfg();
+</script>
+</body>
+</html>

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6fe4">
+<title>摩托罗拉寻呼发射器 · 配置 Wifi</title>
+<style>
+:root{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#eef2f8;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --bad:#d93b3b; --ok:#1a8f4c;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+    --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+    --bad:#ff6b6b; --ok:#3ecf7a;
+  }
+}
+html[data-theme=light]{
+  --bg:#eef2f7; --card:#fff; --line:#d9e2ee; --line2:#eef2f8;
+  --tx:#223; --tx2:#6b7787; --pri:#2f6fe4; --pri-d:#2159c0; --pri-bg:#f5f8fd;
+  --bad:#d93b3b; --ok:#1a8f4c;
+}
+html[data-theme=dark]{
+  --bg:#11151b; --card:#1a2029; --line:#2b3441; --line2:#2a3340;
+  --tx:#e6edf5; --tx2:#8b98a8; --pri:#4d8bf0; --pri-d:#3a76d8; --pri-bg:#1c2531;
+  --bad:#ff6b6b; --ok:#3ecf7a;
+}
+*{box-sizing:border-box;-webkit-text-size-adjust:100%}
+body{margin:0;padding:10px 10px 30px;background:var(--bg);color:var(--tx);
+     font:16px/1.6 "Microsoft YaHei","PingFang SC","Heiti SC",sans-serif;transition:background .2s}
+.wrap{max-width:560px;margin:0 auto}
+h1{font-size:20px;margin:10px 0 2px;text-align:center;color:var(--pri)}
+.sub{text-align:center;color:var(--tx2);font-size:12px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;
+      box-shadow:0 1px 3px rgba(20,60,120,.05)}
+.card h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid var(--line2);color:var(--pri)}
+.card h2 small{float:right;font-weight:400;font-size:12px;color:var(--tx2)}
+.card h2 .tgl{float:right;background:none;border:0;color:var(--tx2);font-size:18px;cursor:pointer;padding:0 4px;line-height:1}
+.fld{margin-bottom:10px}
+.fld .lb{display:block;font-size:13px;color:var(--tx2);margin-bottom:4px}
+input[type=text],input[type=password]{width:100%;border:1px solid var(--line);border-radius:7px;padding:11px 10px;
+     background:var(--card);color:var(--tx);font:inherit;font-size:16px}
+input.bad{border-color:var(--bad)}
+button{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:12px 14px;font:inherit;font-size:16px;width:100%;cursor:pointer}
+button:active{background:var(--pri-d)}
+button.ghost{background:var(--card);color:var(--pri);border:1px solid var(--pri);padding:10px 6px;font-size:14px}
+.btnrow{display:flex;gap:8px;margin-top:10px}
+.btnrow button{flex:1}
+.tip{font-size:12px;color:var(--tx2);margin-top:8px;line-height:1.6}
+#st{margin-top:10px;font-size:14px;color:var(--pri);min-height:22px;text-align:center;line-height:1.6}
+#st.ok{color:var(--ok)}
+#st.bad{color:var(--bad)}
+.nav{display:flex;gap:8px;margin:12px 0}
+.nav a{flex:1;text-align:center;text-decoration:none;background:var(--card);color:var(--pri);
+       border:1px solid var(--pri);border-radius:8px;padding:10px 4px;font-size:15px}
+table.kv{width:100%;font-size:14px;border-collapse:collapse}
+table.kv td{padding:4px 0;color:var(--tx)}
+table.kv td:first-child{color:var(--tx2);width:38%}
+
+/* ---- 扫描结果列表 ---- */
+#slist{margin-top:10px;max-height:330px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.net{display:flex;align-items:center;gap:10px;padding:9px 8px;border-bottom:1px solid var(--line2);cursor:pointer}
+.net:active{background:var(--pri-bg)}
+.net.cur{background:var(--pri-bg)}
+.bars{display:flex;align-items:flex-end;gap:2px;width:22px;height:18px;flex:none}
+.bars i{flex:1;background:var(--line);border-radius:1px}
+.bars i:nth-child(1){height:25%}
+.bars i:nth-child(2){height:50%}
+.bars i:nth-child(3){height:75%}
+.bars i:nth-child(4){height:100%}
+.bars i.on{background:var(--pri)}
+.ninfo{flex:1;min-width:0}
+.ninfo b{display:block;font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ninfo span{font-size:12px;color:var(--tx2)}
+.ntag{font-size:12px;flex:none;padding:2px 7px;border-radius:10px;background:var(--pri);color:#fff}
+.ntag.open{background:var(--tx2)}
+.ntag.cur{background:var(--ok)}
+.hintbox{padding:16px 10px;text-align:center;color:var(--tx2);font-size:14px}
+.lbl{display:flex;align-items:center;gap:8px;font-size:14px;margin-top:8px}
+.lbl input[type=checkbox]{width:20px;height:20px;margin:0;accent-color:var(--pri)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>摩托罗拉寻呼发射器</h1>
+  <p class="sub">WIFI 模块控制 · 配置 Wifi</p>
+
+  <div class="card">
+    <h2>当前状态<button type="button" class="tgl" id="theme" title="切换深色/浅色">◐</button></h2>
+    <table class="kv">
+      <tr><td>AP 热点</td><td id="ap">-</td></tr>
+      <tr><td>AP 地址</td><td id="apip">-</td></tr>
+      <tr><td>STA 状态</td><td id="stas">-</td></tr>
+      <tr><td>STA 地址</td><td id="staip">-</td></tr>
+      <tr><td>已保存 Wifi</td><td id="saved">-</td></tr>
+      <tr><td>存储状态</td><td id="store">-</td></tr>
+      <tr><td>信号强度</td><td id="rssi">-</td></tr>
+      <tr><td>系统时间</td><td id="now">-</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>附近 Wifi<small id="scnt">未扫描</small></h2>
+    <div class="btnrow" style="margin-top:0">
+      <button type="button" id="btn_scan">扫描附近 Wifi</button>
+    </div>
+    <div id="slist"><div class="hintbox">点上面的按钮搜索附近的热点，搜索结果按信号强度排序。</div></div>
+    <div class="tip">扫描时模块会依次切换信道，你手机与设备热点的连接可能短暂中断几秒，属正常现象，稍等即可自动恢复。</div>
+  </div>
+
+  <div class="card">
+    <h2>连接路由器</h2>
+    <form action="" method="POST" target="form_iframe" id="fw">
+      <div class="fld">
+        <span class="lb">Wifi 名称（SSID）</span>
+        <input type="text" name="r_ssid" id="r_ssid" maxlength="29" autocomplete="off" placeholder="点击上方热点自动填入">
+      </div>
+      <div class="fld">
+        <span class="lb">Wifi 密码</span>
+        <input type="text" name="r_psk" id="r_psk" maxlength="29" autocomplete="off" placeholder="Wifi 密码，开放网络留空">
+      </div>
+      <button type="submit" id="btn_conn">连接 Wifi</button>
+      <label class="lbl"><input type="checkbox" id="rmb"><span>在本机记住这个密码（只存在当前手机/电脑浏览器里，不会上传）</span></label>
+      <div id="st"></div>
+    </form>
+    <iframe id="form_iframe" name="form_iframe" style="display:none;"></iframe>
+    <div class="tip">连接成功后热点依然保留，仍可通过 192.168.4.1 访问本页。账号密码会写入模块自身存储与 STM32，掉电不丢，上电自动重连。连上能上网的路由器后天气推送才可用。</div>
+  </div>
+
+  <div class="nav">
+    <a href="/">单呼</a>
+    <a href="group_call">群呼 / 天气</a>
+    <a href="webupdate">固件升级</a>
+  </div>
+</div>
+
+<script>
+(function(){
+  var t=null;try{t=localStorage.getItem("pocsag-theme");}catch(e){}
+  if(t)document.documentElement.setAttribute("data-theme",t);
+  $("theme").onclick=function(){
+    var cur=document.documentElement.getAttribute("data-theme");
+    if(!cur)cur=matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light";
+    var nx=cur==="dark"?"light":"dark";
+    document.documentElement.setAttribute("data-theme",nx);
+    try{localStorage.setItem("pocsag-theme",nx);}catch(e){}
+  };
+})();
+function $(id){return document.getElementById(id);}
+
+/* ---------- 本机密码记忆（键: SSID） ---------- */
+var PKEY="pocsag-wifi-pwd";
+function pwds(){try{return JSON.parse(localStorage.getItem(PKEY)||"{}");}catch(e){return {};}}
+function getPwd(s){return pwds()[s]||"";}
+function setPwd(s,p){if(!s)return;var m=pwds();if(p)m[s]=p;else delete m[s];try{localStorage.setItem(PKEY,JSON.stringify(m));}catch(e){}}
+
+/* ---------- 扫描 ---------- */
+var scanList=[], scanTimer=null;
+function bars(r){                       // RSSI → 0~4 格
+  return r>=-55?4:r>=-67?3:r>=-75?2:r>=-85?1:0;
+}
+function renderScan(d){
+  var box=$("slist");
+  box.innerHTML="";                     // 清空，下面全部用 DOM 节点拼，避免 SSID 被当成 HTML 解析
+  scanList=d.list||[];
+  $("scnt").textContent=scanList.length?("找到 "+scanList.length+" 个"):"未找到";
+  if(!scanList.length){
+    var e=document.createElement("div");
+    e.className="hintbox";
+    e.textContent="没有搜到任何热点，可以再扫一次，或手动输入名称。";
+    box.appendChild(e);
+    return;
+  }
+  scanList.forEach(function(n,i){
+    var row=document.createElement("div");
+    row.className="net"+(n.cur?" cur":"");
+
+    var b=document.createElement("div");
+    b.className="bars";
+    var lv=bars(n.r);
+    for(var k=0;k<4;k++){
+      var s=document.createElement("i");
+      if(k<lv)s.className="on";
+      b.appendChild(s);
+    }
+    row.appendChild(b);
+
+    var info=document.createElement("div");
+    info.className="ninfo";
+    var nm=document.createElement("b");
+    // 关键：用 textContent 而不是 innerHTML。热点名是别人可控的，
+    // 万一有人把 SSID 设成 <img onerror=...>，innerHTML 会直接执行。
+    nm.textContent=n.h?"（隐藏网络）":(n.s||"(无名称)");
+    var meta=document.createElement("span");
+    meta.textContent=(n.c?("信道 "+n.c+" · "):"")+(n.a||"")+" · "+n.r+" dBm";
+    info.appendChild(nm);info.appendChild(meta);
+    row.appendChild(info);
+
+    var tag=document.createElement("div");
+    tag.className="ntag"+(n.cur?" cur":(n.e===0?" open":""));
+    tag.textContent=n.cur?"已连接":(n.e===0?"开放":"加密");
+    row.appendChild(tag);
+
+    row.onclick=function(){pick(i);};
+    box.appendChild(row);
+  });
+}
+function pick(i){
+  var n=scanList[i];if(!n)return;
+  $("r_ssid").value=n.s||"";
+  var p=getPwd(n.s||"");
+  $("r_psk").value=p;
+  $("rmb").checked=!!p;
+  $("st").textContent="已选择「"+(n.s||"(无名称)")+"」，填写密码后点连接";
+  if(!p)$("r_psk").focus();
+  window.scrollTo(0,document.body.scrollHeight);
+}
+function pollScan(){
+  fetch("scan?t="+Date.now()).then(function(r){return r.json();}).then(function(d){
+    if(d.run){
+      $("scnt").textContent="扫描中...";
+      scanTimer=setTimeout(pollScan,600);
+      return;
+    }
+    renderScan(d);
+  }).catch(function(){
+    $("slist").innerHTML='<div class="hintbox">扫描失败，请重试。</div>';
+    $("scnt").textContent="失败";
+  });
+}
+function startScan(){
+  if(scanTimer){clearTimeout(scanTimer);scanTimer=null;}
+  $("scnt").textContent="扫描中...";
+  $("slist").innerHTML='<div class="hintbox">正在扫描，约需 2~4 秒...</div>';
+  fetch("scan?start=1&t="+Date.now()).then(function(){setTimeout(pollScan,700);})
+    .catch(function(){$("slist").innerHTML='<div class="hintbox">无法发起扫描。</div>';});
+}
+$("btn_scan").onclick=startScan;
+
+/* ---------- 状态刷新 ---------- */
+function refresh(){
+  fetch("cfg").then(function(r){return r.json();}).then(function(c){
+    if(!c)return;
+    $("ap").textContent=c.ap||"-";
+    $("apip").textContent=c.apip||"-";
+    $("stas").textContent=c.sta?("已连接 "+(c.ssid||"")):"未连接";
+    $("staip").textContent=c.staip||"-";
+    if(c.savedssid&&c.savedssid.length){
+      $("saved").textContent=c.savedssid+"（重启后会自动重连）";
+      $("saved").style.color="";
+    }else{
+      $("saved").textContent="未保存，重启后会丢失";
+      $("saved").style.color="var(--bad)";
+    }
+    // 存储诊断：文件系统挂了没有？凭据是不是从 EEPROM 兜底来的？
+    var st=$("store");
+    if(st){
+      if(c.fsok===0){
+        st.innerHTML='<b style="color:var(--bad)">⚠ 文件系统不可用</b>，只有 Wifi 账号密码存住了，'+
+          '寻呼参数和天气设置重启后会丢失。<br>'+
+          '原因：Arduino 的「Flash Size」选了没有文件系统的布局，或与实际芯片容量不符。'+
+          '请改成 <b>8MB (FS:6MB OTA:~1019KB)</b>（4MB 模块选 4MB/FS:2MB）后重新编译烧录。';
+      }else if(c.eefrom===1){
+        st.innerHTML='文件系统正常，但里面的账号密码读不到，已从 <b>EEPROM 备份</b>恢复。'+
+          '建议在下面重新保存一次，让两边一致。';
+      }else{
+        st.textContent="配置存储正常。";
+      }
+    }
+    $("rssi").textContent=(c.rssi!=null&&c.sta)?(c.rssi+" dBm"):"-";
+    $("now").textContent=c.time||"-";
+    if(c.ssid&&!$("r_ssid").value)$("r_ssid").value=c.ssid;
+  }).catch(function(){});
+}
+
+/* ---------- 提交 ---------- */
+/* 原来这里只是「显示一句已提交 + 定时刷新」，结果到底连没连上、
+   配置到底存没存住，页面一概不知道 —— 保存失败也显示成功，
+   重启后 Wifi 就没了。现在改成轮询 /wifistat，拿真实状态。 */
+var connT=null;
+function stopConn(){ if(connT){clearInterval(connT);connT=null;} }
+
+function pollConn(){
+  var t0=Date.now();
+  stopConn();
+  connT=setInterval(function(){
+    fetch("wifistat?t="+Date.now()).then(function(r){return r.json();}).then(function(d){
+      var el=(Date.now()-t0)/1000;
+      if(d.st===1){                                   // 还在连
+        $("st").textContent="正在连接…（已 "+(el).toFixed(0)+" 秒）";
+        if(el>28){stopConn();$("st").className="bad";
+          $("st").textContent="连接超时，请检查密码或靠近路由器再试";
+          $("btn_conn").disabled=false;}
+        return;
+      }
+      if(d.st===2&&d.on===1){                         // 连上了
+        stopConn();
+        $("st").className="ok";
+        $("st").textContent="✓ 已连接到「"+d.ssid+"」，IP "+d.ip;
+        $("btn_conn").disabled=false;
+        refresh();
+        return;
+      }
+      if(d.st===3){                                   // 失败，带原因
+        stopConn();
+        $("st").className="bad";
+        $("st").textContent="✗ 连接失败："+(d.why||"未知原因");
+        $("btn_conn").disabled=false;
+        return;
+      }
+    }).catch(function(){
+      // 连不上设备多半是模块在切信道，继续等
+    });
+  },1200);
+}
+
+function trySubmit(){
+  var s=$("r_ssid").value.trim();
+  if(!s){$("st").className="bad";$("st").textContent="请先填写或选择 Wifi 名称";return false;}
+  $("r_ssid").value=s;
+  if($("rmb").checked)setPwd(s,$("r_psk").value);
+  else setPwd(s,"");
+  $("btn_conn").disabled=true;
+  $("st").className="";
+  $("st").textContent="已提交，正在保存并连接…";
+  pollConn();
+  return true;
+}
+$("fw").addEventListener("submit",function(e){ if(!trySubmit())e.preventDefault(); });
+
+/* iframe 回来的结果：-2 = 配置写不进去（最常见的原因是文件系统没挂载） */
+$("form_iframe").addEventListener("load",function(){
+  try{
+    var t=this.contentDocument?this.contentDocument.body.textContent:"";
+    t=(t||"").trim();
+    if(t==="-2"){
+      stopConn();
+      $("st").className="bad";
+      $("st").textContent="✗ 配置没能写入 Flash，重启后 Wifi 会丢失。"+
+        "请重新用串口烧录一次完整固件（含文件系统），或先到「固件升级」页确认 Flash 容量设置。";
+      $("btn_conn").disabled=false;
+    }
+  }catch(e){}
+});
+$("r_ssid").addEventListener("input",function(){
+  var p=getPwd(this.value.trim());
+  if(p){$("r_psk").value=p;$("rmb").checked=true;}
+});
+
+refresh();
+setInterval(refresh,10000);
+</script>
+</body>
+</html>
