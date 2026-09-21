@@ -1,20 +1,24 @@
 /***************************************************************************
- * ESP8266.ino —— 摩托罗拉寻呼发射器 Web 控制端（4MB Flash 重制版）
+ * ESP8266.ino —— 摩托罗拉寻呼发射器 Web 控制端
+ *                4MB Flash / 5 路群呼 / 腾讯天气（免 Key）
  *
- * 适用平台：ESP8266-01S（必须换成 4MB Flash 才能用本固件）
+ * 适用平台：ESP8266-01S 等模块（必须换成 4MB Flash 才能用本固件）
  * 编译工具：Arduino + esp8266 core 2.7.x / 3.x
  * 板卡配置：Generic ESP8266 Module
- *           Flash Size : 4MB (FS:2MB OTA:~1019KB)
+ *           Flash Size : 4MB (FS:2MB OTA:~1019KB)   ← 必须选这一项，选 1MB 会装不下
+ *           Flash Mode : QIO / DIO 均可
  *           SSL Support: All SSL ciphers (most compatible)   ← 天气推送要用到 HTTPS
  *
  * 原始项目：359303267/STM32_POCSAG_Transmit（原作者：小小小日天）
  * 本次改动：
  *   1. 全部页面重做为手机自适应（viewport + flex/grid 响应式布局）
- *   2. 群呼由「20 个复选框」改为「10 行表格」：勾选 + 序号 + 频率 + 地址码 + 速率 + 相位
- *   3. 新增天气推送：Open-Meteo(免Key) / 心知天气 / 和风天气，支持每日定时与手动触发
- *   4. 网页改为 PROGMEM 分片 chunked 发送，发送过程几乎不占用堆内存
- *   5. 配置持久化到 LittleFS，掉电不丢失
- *   6. 发射改为后台队列 + 非阻塞等待，不再卡住 Web 服务
+ *   2. 群呼由「20 个复选框」改为「5 行表格」：勾选 + 序号 + 频率 + 地址码 + 速率 + 相位
+ *   3. 天气推送：腾讯天气 wis.qq.com（免 Key，默认）+ Open-Meteo（免 Key），
+ *      全部数据源都不要 Key，支持每日定时与手动触发
+ *   4. 界面视觉升级：渐变品牌头、大圆角卡片、滑块开关、毛玻璃底栏
+ *   5. 网页改为 PROGMEM 分片 chunked 发送，发送过程几乎不占用堆内存
+ *   6. 配置持久化到 LittleFS，掉电不丢失
+ *   7. 发射改为后台队列 + 非阻塞等待，不再卡住 Web 服务
  *
  * 本项目遵循 GPL 协议，个人 DIY 免费，未经授权不得商用。
  *
@@ -43,11 +47,14 @@
 #define STA_SSID  ""              // 家里/单位路由器的名称，留空则只开 AP
 #define STA_PSK   ""              // 路由器密码
 
+#define ENABLE_OTA 0              // 0=隐藏固件升级页（导航不显示，/webupdate 返回 404）
+                                  // 1=恢复升级页（需要 OTA 时改成 1 重新编译烧一次）
+
 #define DEBUG 0                   // 置 1 可从串口看到调试信息（注：串口已与 STM32 共用）
 /* ==================================================== */
 
-#define FW_VER      "V2.0-4M"
-#define PAGER_NUM   10
+#define FW_VER      "V2.1-4M-5CH"
+#define PAGER_NUM   5             // 群呼路数：5 行表格（改这里网页行数会自动跟着变，别忘重新生成 html.c）
 #define TX_QUEUE    12            // 发送队列深度
 #define TX_LINE_MAX 260           // 单条串口命令最大长度（STM32 缓冲区 400 字节）
 #define MSG_MAX     120           // 消息最大字符数（汉字按 2 字节算，120 字符 = 240 字节）
@@ -95,9 +102,8 @@ struct Cfg {
   uint16_t gap;     // 固定间隔（自适应关闭时用）
   uint8_t adaptGap; // 1=按消息长度估算等待（快很多） 0=用固定 gap
   uint8_t grpFreq;  // 1=同频的行排在一起发，减少切频次数
-  uint8_t wxSrc;    // 0=Open-Meteo 1=心知 2=和风
-  char  wxKey[40];
-  char  wxCity[32];
+  uint8_t wxSrc;    // 0=腾讯天气（免 Key，默认） 1=Open-Meteo（免 Key）
+  char  wxCity[40]; // 腾讯：省,市,区县（如 广西,南宁,青秀区）；Open-Meteo：纬度,经度
   char  wxName[24]; // 天气里显示的城市名（可留空：留空则用接口返回的名字）
   uint8_t wxHour[WX_SLOTS];   // 每日推送时间，最多三组
   uint8_t wxMin[WX_SLOTS];
@@ -122,6 +128,25 @@ uint8_t txState = 0;              // 0=空闲 1=等待切频 2=等待发射完�
 uint32_t txWaitUntil = 0;
 volatile bool txAcked = false;    // 收到 STM32 的 #TXOK（需给 STM32 打补丁，见 README）
 
+#define HUNT_MAX_SHOTS 5000      // 一次最多发这么多条，防误填范围跑上几小时
+#define HUNT_FEED_LOW  3         // 队列里保持这么多条就够；填太满会让「停止」迟钝
+#define HUNT_MSG_MAX   20        // 测试消息长度上限（越短扫得越快）
+#define HUNT_F_MIN     1360000   // 136.0000 MHz
+#define HUNT_F_MAX     1740000   // 174.0000 MHz
+#define HUNT_A_MAX     2097151   // 7 位地址码上限
+
+struct Hunt {
+  bool     active = false;   // 还在生成任务
+  uint32_t fCur = 0, fEnd = 0, fStep = 1;
+  uint32_t aCur = 1, aBeg = 1, aEnd = 1;
+  uint32_t total = 0;        // 本次要发的总条数（>0 表示刚扫过/正在扫）
+  uint32_t sent  = 0;        // 已入队
+  uint32_t done  = 0;        // 已发完（txPump 里累加，不受队列排空影响）
+  char     rate  = 'H';
+  char     phase = 'P';
+  char     msg[HUNT_MSG_MAX + 4];
+} hunt;
+
 /* ---------------- 天气 ---------------- */
 struct Wx {
   bool    valid = false;
@@ -130,6 +155,8 @@ struct Wx {
   String  city;      // 接口返回的城市名（UTF-8），Open-Meteo 没有这个字段
   int     temp = 0;
   int     hum  = -1;
+  int     hi   = -100;  // 今日最高温（腾讯 forecast_24h）
+  int     lo   = -100;  // 今日最低温
   int     lvl  = -1; // 蒲福风级
   uint32_t at  = 0;  // 获取时刻
   String  text;      // 上次生成的人类可读预览（UTF-8）
@@ -403,12 +430,11 @@ void cfgDefault() {
   cfg.gap   = 8000;
   cfg.adaptGap = 1;         // 默认自适应：短消息不再空等 8 秒
   cfg.grpFreq  = 1;         // 默认同频归组：切频次数从「每行一次」降到「每个频点一次」
-  cfg.wxSrc = 0;
-  cfg.wxKey[0]  = 0;
-  snprintf(cfg.wxCity, sizeof(cfg.wxCity), "22.8170,108.3665");   // 广西南宁
-  // 城市名默认填上，而不是留空：三个数据源里只有心知天气会回传城市名，
-  // Open-Meteo（默认源，免 Key）和和风都不返回，留空的话城市就永远不显示，
-  // 看上去像功能没生效。默认位置是南宁，这里跟着填南宁，用户改位置时一并改掉。
+  cfg.wxSrc = 0;                                                  // 默认腾讯天气（免 Key）
+  snprintf(cfg.wxCity, sizeof(cfg.wxCity), "广西,南宁,青秀区");   // 腾讯按行政区划查询
+  // 城市名默认填上，而不是留空：腾讯天气与 Open-Meteo 都不回传城市名，
+  // 留空的话城市就永远不显示，看上去像功能没生效。
+  // 默认位置是南宁，这里跟着填南宁，用户改位置时一并改掉。
   copyStr(cfg.wxName, "\xe5\x8d\x97\xe5\xae\x81", sizeof(cfg.wxName));   // 南宁
   // 三个时间点：默认只启用第一个（07:30），后两个给了常用值但默认关闭，
   // 免得用户还没设置就一天推三次。
@@ -434,7 +460,7 @@ bool cfgSave() {
   if (!fsOk) { DBG("[cfg] fs unavailable, wifi kept in EEPROM only\n"); return okEe; }
   File f = MYFS.open(CFG_FILE, "w");
   if (!f) { DBG("[cfg] open for write failed\n"); fsOk = false; return okEe; }
-  f.print("ver=2");
+  f.print("ver=3");                       // ver=3：5 路群呼 + 免 Key 数据源（腾讯 / Open-Meteo）
   for (uint8_t i = 0; i < PAGER_NUM; i++) {
     f.printf("&f%d=%s&a%d=%s&r%d=%c&p%d=%c&s%d=%d&w%d=%d",
              i, cfg.pg[i].freq, i, cfg.pg[i].addr,
@@ -443,8 +469,8 @@ bool cfgSave() {
   }
   f.printf("&type=%c&beep=%c&gap=%u&adg=%u&gfr=%u",
            cfg.type, cfg.beep, cfg.gap, cfg.adaptGap, cfg.grpFreq);
-  f.printf("&wsrc=%u&wkey=%s&wcity=%s&wname=%s&wauto=%u",
-           cfg.wxSrc, urlEnc(String(cfg.wxKey)).c_str(), urlEnc(String(cfg.wxCity)).c_str(),
+  f.printf("&wsrc=%u&wcity=%s&wname=%s&wauto=%u",
+           cfg.wxSrc, urlEnc(String(cfg.wxCity)).c_str(),
            urlEnc(String(cfg.wxName)).c_str(), cfg.wxAuto);
   for (uint8_t i = 0; i < WX_SLOTS; i++)
     f.printf("&whh%u=%u&wmm%u=%u&won%u=%u",
@@ -556,6 +582,24 @@ void cfgLoadWifiFallback() {
   DBG("[cfg] wifi restored from EEPROM\n");
 }
 
+// 判断是不是 "22.8170,108.3665" 这种经纬度写法。
+// 腾讯天气按【行政区划名】查询（省,市,区县），给它坐标是查不到东西的，
+// 所以升级上来时要把老配置里的坐标认出来并换掉。
+bool looksLikeLatLon(const String& s) {
+  int c = s.indexOf(',');
+  if (c < 0) return false;
+  String a = s.substring(0, c);
+  a.trim();
+  bool digit = false;
+  for (size_t i = 0; i < a.length(); i++) {
+    char ch = a[i];
+    if (isdigit((unsigned char)ch)) { digit = true; continue; }
+    if (ch == '.' || ch == '-' || ch == '+') continue;
+    return false;                       // 出现字母/汉字，说明是地名
+  }
+  return digit;
+}
+
 void cfgLoad() {
   cfgDefault();
   fsOk = fsBegin();
@@ -605,9 +649,12 @@ void cfgLoad() {
   v = getKV(s, "gap");  if (v.length()) { uint32_t g = v.toInt(); if (g >= 1000 && g <= 60000) cfg.gap = (uint16_t)g; }
   v = getKV(s, "adg");  cfg.adaptGap = (v == "0") ? 0 : 1;
   v = getKV(s, "gfr");  cfg.grpFreq  = (v == "0") ? 0 : 1;
-  v = getKV(s, "wsrc"); if (v.length()) cfg.wxSrc = (uint8_t)constrain(v.toInt(), 0, 2);
-  v = getKV(s, "wkey"); if (v.length()) copyStr(cfg.wxKey, urlDec(v), sizeof(cfg.wxKey));
+  v = getKV(s, "wsrc"); if (v.length()) cfg.wxSrc = (uint8_t)constrain(v.toInt(), 0, 1);
   v = getKV(s, "wcity"); if (v.length()) { String d = urlDec(v); if (d.length()) copyStr(cfg.wxCity, d, sizeof(cfg.wxCity)); }
+  // 旧固件存的是经纬度（22.8170,108.3665），腾讯天气按行政区划查询，用不了坐标。
+  // 检测到坐标就换回默认行政区划，免得用户一升级天气就取不到。
+  if (cfg.wxSrc == 0 && looksLikeLatLon(String(cfg.wxCity)))
+    snprintf(cfg.wxCity, sizeof(cfg.wxCity), "广西,南宁,青秀区");
   v = getKV(s, "wname"); copyStr(cfg.wxName, urlDec(v), sizeof(cfg.wxName));
   for (uint8_t i = 0; i < WX_SLOTS; i++) {
     char kh[8], km[8], ko[8];
@@ -683,6 +730,9 @@ void txPump() {
         qHead = (qHead + 1) % TX_QUEUE;
         qCount--;
         txDone++;
+        // 队列一排空 txTotal/txDone 就会被复位，长扫描会丢进度，
+        // 所以这里单独给扫描记一份账。
+        if (hunt.total && hunt.done < hunt.total) hunt.done++;
         txState = 0;
       }
       break;
@@ -699,7 +749,7 @@ void txPump() {
  *     汉字机：20 bit 信息位装 2 字节（GB18030 双字节）
  *     数字机：20 bit 信息位装 5 个 BCD 字符
  *
- * 原版逻辑是「每条都干等固定间隔」，短消息也要等满 8 秒，10 行群呼 80 多秒。
+ * 原版逻辑是「每条都干等固定间隔」，短消息也要等满 8 秒，5 行群呼 40 多秒。
  * 这里按上面公式算出真实耗时，再加安全系数和 STM32 编码开销。
  * 收到 STM32 的 #TXOK 应答时仍然立即发下一条，那是最准的。
  * ------------------------------------------------------------------- */
@@ -726,6 +776,191 @@ uint32_t txWaitFor(uint8_t i, const String& msg) {
   if (w < TX_MIN_WAIT) w = TX_MIN_WAIT;
   if (w > 60000UL) w = 60000UL;
   return w;
+}
+
+/* =====================================================================
+ *  追码 / 追频（地毯式扫描，定位未知呼机）
+ *
+ *  用途：手里有台呼机，但不知道它的地址码和频点 —— 就用这个遍历：
+ *  每个频点上把地址码区间挨个发一遍简短测试消息，呼机响了就记下当时的
+ *  「频率 + 地址码」，那一组就是它的。
+ *
+ *  两条设计要点：
+ *
+ *  1) 遍历顺序是【频率在外、地址在内】。
+ *     #SET+FREQ 要等锁相环重新锁定（FREQ_SETTLE_MS），比换地址码贵得多。
+ *     频率外层 → 每个频点只切一次频，切频次数 = 频点数；
+ *     地址外层 → 切频次数 = 频点数 × 地址数，慢几十倍。
+ *
+ *  2) 不预生成任务。几千上万条塞不进 TX_QUEUE(12)，而且这是「边扫边看」
+ *     的活，随时要能停。所以只在队列快空时补几条，停止指令一下就生效。
+ *
+ *  频率一律用【0.0001 MHz 为单位的整数】参与运算（152.8250 → 1528250），
+ *  避免浮点累加漂移：0.0250 步进加几十次后会出现 152.8499 这种脏值。
+ *  ==================================================================== */
+
+
+// 频率整数 → "152.8250"
+void huntFreqStr(uint32_t u, char* out, size_t cap) {
+  snprintf(out, cap, "%u.%04u", (unsigned)(u / 10000UL), (unsigned)(u % 10000UL));
+}
+
+void huntReset() {                       // 让位给普通群呼/单呼的进度显示
+  hunt.active = false;
+  hunt.total = 0; hunt.sent = 0; hunt.done = 0;
+}
+
+void huntStop() {
+  hunt.active = false;
+  hunt.total = 0; hunt.sent = 0; hunt.done = 0;
+}
+
+// 扫描每条之间要等多久：与群呼同一套估算，保证短消息也能发完整
+uint32_t huntWaitMs() {
+  if (!cfg.adaptGap) return cfg.gap;     // 关了自适应就听用户的固定间隔
+  uint32_t rate  = (hunt.rate == 'L') ? 512UL : (hunt.rate == 'H') ? 1200UL : 2400UL;
+  size_t   nb    = strlen(hunt.msg);
+  uint32_t msgCw = (cfg.type == 'T') ? ((nb + 1) / 2) : ((nb + 4) / 5);
+  uint32_t totalCw = 1 + msgCw + 1;                 // 地址码字 + 消息 + 结束码字
+  uint32_t batches = (totalCw + 15) / 16;
+  uint32_t bits    = 576UL + batches * 544UL + 64UL;
+  uint32_t w = (uint32_t)((uint64_t)bits * 1000UL / rate) * TX_SAFETY_NUM / TX_SAFETY_DEN
+             + TX_MCU_OVERHEAD;
+  if (w < TX_MIN_WAIT) w = TX_MIN_WAIT;            // 太短会打断上一条
+  if (w > 60000UL)     w = 60000UL;
+  return w;
+}
+
+// 返回总条数，参数不合法返回 0
+uint32_t huntPlan(uint32_t f0, uint32_t f1, uint32_t step,
+                  uint32_t a0, uint32_t a1) {
+  if (step == 0) return 0;
+  if (f0 < HUNT_F_MIN || f1 > HUNT_F_MAX || f0 > f1) return 0;
+  if (a0 < 1 || a1 > HUNT_A_MAX || a0 > a1) return 0;
+  uint64_t nf = ((uint64_t)(f1 - f0) / step) + 1;   // 频点数
+  uint64_t na = (uint64_t)(a1 - a0) + 1;            // 地址数
+  uint64_t t  = nf * na;
+  if (t == 0 || t > HUNT_MAX_SHOTS) return 0;
+  return (uint32_t)t;
+}
+
+bool huntStart(uint32_t f0, uint32_t f1, uint32_t step,
+               uint32_t a0, uint32_t a1, char rate, char phase, const String& msg) {
+  uint32_t t = huntPlan(f0, f1, step, a0, a1);
+  if (!t) return false;
+  if (rate != 'L' && rate != 'H' && rate != 'S') return false;
+  if (phase != 'P' && phase != 'N') return false;
+
+  txClear();
+  hunt.fCur = f0; hunt.fEnd = f1; hunt.fStep = step;
+  hunt.aCur = a0; hunt.aBeg = a0; hunt.aEnd = a1;
+  hunt.total = t; hunt.sent = 0; hunt.done = 0;
+  hunt.rate = rate; hunt.phase = phase;
+  hunt.msg[0] = 0;
+  strncpy(hunt.msg, msg.c_str(), HUNT_MSG_MAX);
+  hunt.msg[HUNT_MSG_MAX] = 0;
+  hunt.active = true;
+  txTotal = (t > 255) ? 255 : t;        // 复用现有进度条（单字节，超了就截断显示）
+  DBG("[hunt] start f=%u.%04u..%u.%04u step %u, addr %u..%u, %u shots\n",
+      (unsigned)(f0/10000), (unsigned)(f0%10000),
+      (unsigned)(f1/10000), (unsigned)(f1%10000),
+      (unsigned)step, (unsigned)a0, (unsigned)a1, (unsigned)t);
+  return true;
+}
+
+// 队列快空了就补几条（在 loop 里调）
+void huntTick() {
+  if (!hunt.active) return;
+  while (qCount < HUNT_FEED_LOW) {
+    if (hunt.fCur > hunt.fEnd) { hunt.active = false; return; }   // 全部入队完毕
+
+    char freq[12], addr[8], line[TX_LINE_MAX];
+    huntFreqStr(hunt.fCur, freq, sizeof(freq));
+    snprintf(addr, sizeof(addr), "%07u", (unsigned)hunt.aCur);
+    snprintf(line, sizeof(line), "#%c%s%c%c%c%s",
+             hunt.phase, addr, cfg.beep, hunt.rate, cfg.type, hunt.msg);
+
+    if (!txEnqueue(freq, line, huntWaitMs())) return;   // 满了，下一轮再说
+    hunt.sent++;
+
+    // 地址先走完一轮，再进下一个频点（切频最贵，放外层）
+    if (hunt.aCur >= hunt.aEnd) { hunt.aCur = hunt.aBeg; hunt.fCur += hunt.fStep; }
+    else hunt.aCur++;
+  }
+}
+
+/* 当前正在发的那一条的「频率 / 地址码」，给页面显示。
+ *
+ * 不能用扫描游标反推：huntTick 会预先往队列里填几条，游标已经跑到
+ * 真正正在发那条的前面去了（最多差一个队列深度），照它显示的话，
+ * 用户看到的号码会比呼机实际响的那条超前十几条 —— 那这个功能就废了。
+ * 所以直接读队列头 txq[qHead]，它就是此刻正在发射（或正要发射）的那条。 */
+void huntCurrent(char* freq, size_t fc, char* addr, size_t ac) {
+  freq[0] = 0; addr[0] = 0;
+  if (qCount == 0) return;
+  strncpy(freq, txq[qHead].freq, fc - 1);
+  freq[fc - 1] = 0;
+  // line 形如 #<相位><地址码7><响声><速率><类型><消息>，地址码固定在下标 2..8
+  const char* L = txq[qHead].line;
+  if (L[0] == '#' && strlen(L) >= 9) {
+    for (int i = 0; i < 7; i++) addr[i] = L[2 + i];
+    addr[7] = 0;
+  }
+}
+
+// POST /hunt?start=1... 开始；?stop=1 停止
+void hunt_server() {
+  if (argHas("stop")) { txClear(); huntStop(); server.send(200, "application/json; charset=utf-8", "{\"ok\":1}"); return; }
+
+  uint32_t f0   = (uint32_t)argVal("f0", "0").toInt();
+  uint32_t f1   = (uint32_t)argVal("f1", "0").toInt();
+  uint32_t step = (uint32_t)argVal("step", "0").toInt();
+  uint32_t a0   = (uint32_t)argVal("a0", "0").toInt();
+  uint32_t a1   = (uint32_t)argVal("a1", "0").toInt();
+  String  rate  = argVal("rate", "H");
+  String  phase = argVal("phase", "P");
+  String  msg   = argVal("msg", "TEST");
+
+  // 独立页面就见不到群呼页那套「消息与全局参数」了，所以把响声 / 机型 /
+  // 间隔也一并带过来。给了就更新 cfg 并落盘，下次进页面还是这套值。
+  bool touched = false;
+  // 注意别对空 String 取 [0] —— Arduino 的 operator[] 不做越界检查，会读到脏值。
+  // 参数被显式提交成空串时 argVal 会返回空，所以这里一律先判长度。
+  if (argHas("beep")) {
+    String v = argVal("beep", "");
+    char b = v.length() ? v[0] : '0';
+    if (b >= '0' && b <= '3' && b != cfg.beep) { cfg.beep = b; touched = true; }
+  }
+  if (argHas("type")) {
+    String v = argVal("type", "");
+    char t = v.length() ? v[0] : 'N';
+    if ((t == 'N' || t == 'T') && t != cfg.type) { cfg.type = t; touched = true; }
+  }
+  if (argHas("adapt")) {
+    uint8_t a = argVal("adapt", "0").toInt() ? 1 : 0;
+    if (a != cfg.adaptGap) { cfg.adaptGap = a; touched = true; }
+  }
+  if (argHas("gap")) {
+    long g = argVal("gap", "0").toInt();
+    if (g >= 500 && g <= 60000 && (uint16_t)g != cfg.gap) { cfg.gap = (uint16_t)g; touched = true; }
+  }
+  if (touched) cfgSave();
+
+  uint32_t t = huntPlan(f0, f1, step, a0, a1);
+  if (!t) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"ok\":0,\"err\":\"范围不合法或总条数超过 %u 条，请缩小范围\"}", (unsigned)HUNT_MAX_SHOTS);
+    server.send(200, "application/json; charset=utf-8", buf);
+    return;
+  }
+  if (!huntStart(f0, f1, step, a0, a1, rate.length() ? rate[0] : 'H',
+                 phase.length() ? phase[0] : 'P', msg)) {
+    server.send(200, "application/json; charset=utf-8", "{\"ok\":0,\"err\":\"参数错误\"}");
+    return;
+  }
+  char buf[96];
+  snprintf(buf, sizeof(buf), "{\"ok\":1,\"total\":%u}", (unsigned)t);
+  server.send(200, "application/json; charset=utf-8", buf);
 }
 
 // 组装发给 STM32 的发射指令：#<相位><地址码7><响声><速率><类型><消息>
@@ -808,10 +1043,17 @@ void index_page_server() {
   memcpy(line + used, m.c_str(), m.length());
   line[used + m.length()] = 0;
 
+  huntReset();                  // 让位：进度条改回显示普通发送的进度
   int ok = txEnqueue(freq, line, txWaitFor(0, m)) ? 1 : -1;
   if (ok == 1) txTotal += 1;
   sendIframeReply(ok);
 }
+
+// 追码 / 追频独立页面
+void hunt_page_server() { sendPage(PAGE_HUNT); }
+
+// 天气推送独立页面
+void weather_page_server() { sendPage(PAGE_WEATHER); }
 
 void group_page_server() {
   if (server.method() != HTTP_POST) { sendPage(PAGE_GROUP); return; }
@@ -861,7 +1103,7 @@ void group_page_server() {
 
   // 4) 入队。
   //    默认按频率归组（稳定排序，同频内仍按序号升序）：切频一次要等 400ms 锁相，
-  //    10 行若是 3 个频点，就从 10 次切频降到 3 次，省 2.8 秒。
+  //    5 行若是 3 个频点，就从 5 次切频降到 3 次，省 0.8 秒。
   //    想要严格按序号发，把「同频归组」关掉即可。
   uint8_t ord[PAGER_NUM], on = 0;
   for (uint8_t i = 0; i < PAGER_NUM; i++)
@@ -879,6 +1121,7 @@ void group_page_server() {
     }
   }
 
+  huntReset();                  // 同上
   int n = 0;
   char line[TX_LINE_MAX];
   for (uint8_t k = 0; k < on; k++) {
@@ -1039,8 +1282,7 @@ void scan_server() {
 
 void wxcfg_server() {
   String v;
-  v = argVal("wsrc"); if (v.length()) cfg.wxSrc = (uint8_t)constrain(v.toInt(), 0, 2);
-  v = argVal("wkey");  copyStr(cfg.wxKey,  v, sizeof(cfg.wxKey));
+  v = argVal("wsrc"); if (v.length()) cfg.wxSrc = (uint8_t)constrain(v.toInt(), 0, 1);
   v = argVal("wcity"); if (v.length()) copyStr(cfg.wxCity, v, sizeof(cfg.wxCity));
   v = argVal("wname"); copyStr(cfg.wxName, v, sizeof(cfg.wxName));   // 可留空 = 用接口返回的城市名
   // 三个时间点：wt0/wt1/wt2 = "HH:MM"，won0/won1/won2 = 是否启用
@@ -1058,6 +1300,19 @@ void wxcfg_server() {
     cfg.wxOn[i] = argHas(ko) ? 1 : 0;
   }
   cfg.wxAuto = argHas("wauto") ? 1 : 0;
+
+  /* 推送目标：天气页独立成页后就见不到群呼列表了，
+   * 所以「天气」列的勾选必须能在这一页设置。
+   * 只有带 w0..w4 参数过来才改 —— 群呼页的 wxSave() 不带这些参数，
+   * 那边仍然以列表为准，两边互不干扰。 */
+  bool anyW = false;
+  for (uint8_t i = 0; i < PAGER_NUM; i++) {
+    char kw[8];
+    snprintf(kw, sizeof(kw), "w%u", i);
+    if (argHas(kw)) { cfg.pg[i].wx = argVal(kw, "0").toInt() ? 1 : 0; anyW = true; }
+  }
+  if (anyW) DBG("[wx] target mask updated from weather page\n");
+
   wxDoneMask = 0;                                       // 改配置后允许立刻再推一次
   cfgSave();
   sendIframeReply(1);
@@ -1093,6 +1348,7 @@ void wxpush_server() {
 
 void cancel_server() {
   txClear();
+  huntStop();                     // 扫描也一起停，不然队列清了它还会继续补货
   server.send(200, "application/json; charset=utf-8", "{\"ok\":1}");
 }
 
@@ -1103,11 +1359,24 @@ void status_server() {
     uint32_t now = millis();
     rem = ((int32_t)(txWaitUntil - now) > 0) ? (txWaitUntil - now) : 0;
   }
+  // 扫描进行中/刚扫完时，进度以扫描为准（txTotal/txDone 会在队列排空时被复位）
+  uint32_t d = txDone, t = txTotal;
+  if (hunt.total) { d = hunt.done; t = hunt.total; }
+
   String j = "{\"q\":" + String(qCount) +
-             ",\"done\":" + String(txDone) +
-             ",\"total\":" + String(txTotal) +
+             ",\"done\":" + String(d) +
+             ",\"total\":" + String(t) +
              ",\"rem\":" + String(rem) +
-             ",\"heap\":" + String(ESP.getFreeHeap()) + "}";
+             ",\"heap\":" + String(ESP.getFreeHeap());
+  if (hunt.total) {                       // sc=1 时前端显示「正在扫哪个频点/哪个码」
+    char hf[12], ha[8];
+    huntCurrent(hf, sizeof(hf), ha, sizeof(ha));
+    j += ",\"sc\":1,\"sf\":\"" + jsonEsc(String(hf)) +
+         "\",\"sa\":\"" + jsonEsc(String(ha)) + "\"";
+  } else {
+    j += ",\"sc\":0";
+  }
+  j += "}";
   server.send(200, "application/json; charset=utf-8", j);
 }
 
@@ -1186,8 +1455,7 @@ void cfg_server() {
   char t0[8];
   snprintf(t0, sizeof(t0), "%02u:%02u", cfg.wxHour[0], cfg.wxMin[0]);
   j += ",\"wx\":{\"src\":" + String(cfg.wxSrc) +
-       ",\"key\":\"" + jsonEsc(String(cfg.wxKey)) +
-       "\",\"city\":\"" + jsonEsc(String(cfg.wxCity)) +
+       ",\"city\":\"" + jsonEsc(String(cfg.wxCity)) +
        "\",\"name\":\"" + jsonEsc(String(cfg.wxName)) +
        "\",\"gotcity\":\"" + jsonEsc(wx.city) +
        "\",\"t\":\"" + String(t0) +                       // 兼容：第一组时间
@@ -1483,14 +1751,63 @@ void staDisconnect() {
   Serial.println("#WIFI+FAILE");
 }
 
+/* ---------------------------------------------------------------------
+ * RF 校准数据自检
+ *
+ * 自己换过 Flash 芯片的模块，最容易踩的坑就是 RF 校准数据（rfcal）丢了：
+ * 新 Flash 出厂整片 0xFF，而 rfcal 存在 Flash 最后一个扇区（4MB 模块在 0x3FC000），
+ * 串口烧录程序时又不带这一段 —— 于是 phy 初始化拿不到校准值，
+ * 表现就是：程序明明在跑、串口有输出，但手机【完全搜不到热点】，
+ * 或者信号弱到贴脸才能连上。STA 扫不到任何网络也是同一个原因。
+ *
+ * 这里开机读一下那一段，全 0xFF 就通过串口明确喊出来，
+ * 免得用户对着"搜不到热点"干瞪眼，以为是固件或天线坏了。
+ * ------------------------------------------------------------------- */
+// rfcal 固定在 Flash 倒数第 4 个扇区往前数：真实容量 - 0x4000。
+// 4MB -> 0x3FC000，1MB -> 0xFC000，8MB -> 0x7FC000，自动适配，不用手改。
+#define RFCAL_SIZE 0x1000
+
+static uint32_t rfcalAddr() {
+  uint32_t sz = ESP.getFlashChipRealSize();
+  if (sz < 0x100000UL) sz = 0x100000UL;                 // 认不出容量就按最小 1MB 算
+  return sz - 0x4000UL;
+}
+
+bool rfcalLooksBlank() {
+  uint32_t base = rfcalAddr();
+  uint32_t buf[32];
+  for (uint32_t off = 0; off < RFCAL_SIZE; off += sizeof(buf)) {
+    if (!ESP.flashRead(base + off, buf, sizeof(buf))) return true;   // 读不了就当作有问题
+    for (size_t i = 0; i < 32; i++)
+      if (buf[i] != 0xFFFFFFFFUL) return false;                      // 有非 0xFF 内容 = 校准值在
+  }
+  return true;
+}
+
 void apStart() {
   // 凭据由我们自己存在 LittleFS 里，不让 SDK 每次 begin() 都往 Flash 写一遍 ——
   // 那片区域没有磨损均衡，反复写既费 Flash，还可能撞上库的竞态把 WiFi 搞坏。
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(apIP, apGW, apMask);
-  WiFi.softAP(AP_SSID, AP_PSW);
-  DBG("[ap] %s %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+
+  // 固定信道 1：2.4G 里 1 是全球都允许的信道。
+  // 不指定的话 SDK 会自己挑（可能挑到 12/13），部分手机/平板在某些地区
+  // 不会去扫这两个信道，表现同样是"搜不到热点"。
+  bool ok = WiFi.softAP(AP_SSID, AP_PSW, 1, 0, 4);   // 信道1，不隐藏，最多 4 个客户端
+
+  DBG("[ap] %s %s %s\n", AP_SSID, WiFi.softAPIP().toString().c_str(), ok ? "ok" : "FAILED");
+  // DEBUG=0 时 DBG 展开成空语句，ok 就没人用了 —— 显式吃掉，免得编译报警告
+  (void)ok;
+
+  if (rfcalLooksBlank()) {
+    // 这条是给换过 Flash 的模块看的：rfcal 空了，WiFi 大概率起不来或信号极弱。
+    DBG("[warn] RF 校准数据为空（地址 0x%06X 全是 0xFF），WiFi 可能完全不可用！\n"
+        "       换过 Flash 芯片请补一段：\n"
+        "       esptool write_flash 0x%06X esp_init_data_default.bin\n"
+        "       一键脚本：python3 tools/fix_rfcal.py --port 串口号\n",
+        (unsigned)rfcalAddr(), (unsigned)rfcalAddr());
+  }
 }
 
 void serverRoutes() {
@@ -1500,17 +1817,27 @@ void serverRoutes() {
   server.on("/wifi",       wifi_page_server);
   server.on("/scan",       scan_server);
   server.on("/wifistat",   wifistat_server);
+  server.on("/weather",    weather_page_server);
   server.on("/wxcfg",      HTTP_POST, wxcfg_server);
   server.on("/wxnow",      wxnow_server);
   server.on("/wxpush",     HTTP_POST, wxpush_server);
+  server.on("/hunt",       HTTP_GET,  hunt_page_server);   // 扫描页面
+  server.on("/hunt",       HTTP_POST, hunt_server);        // 开始/停止
   server.on("/cancel",     HTTP_POST, cancel_server);
   server.on("/cfg",        cfg_server);
   server.on("/status",     status_server);
+#if ENABLE_OTA
   server.on("/webupdate", HTTP_GET, []() {
     server.sendHeader("Connection", "close");
     sendPage(PAGE_UPDATE);
   });
   server.on("/update", HTTP_POST, otaReply, UpdateProcess);
+#else
+  // 升级页已隐藏：这里显式注册成 404，避免被 onNotFound 兜底成 302 跳回首页。
+  // 跳首页等于告诉对方「这个地址有用，只是要跳转」，404 才是真的不存在。
+  server.on("/webupdate", HTTP_GET, []() { server.send(404, "text/plain", "404 Not Found"); });
+  server.on("/update",    HTTP_POST, []() { server.send(404, "text/plain", "404 Not Found"); });
+#endif
   server.onNotFound([]() {
     server.sendHeader("Location", "/", true);
     server.send(302, "text/plain", "");
@@ -1605,26 +1932,87 @@ static const char* degToDir(float d) {
   return d8[i];
 }
 
+/* ---------------------------------------------------------------------
+ * 腾讯天气（wis.qq.com）—— 默认数据源
+ *
+ * 免 Key、不用注册，按行政区划直接查：
+ *   https://wis.qq.com/weather/common?source=pc&weather_type=observe|forecast_24h
+ *       &province=广西&city=南宁&county=青秀区
+ * 返回（节选）：
+ *   {"data":{"observe":{"degree":"28","weather":"多云","humidity":"65",
+ *                       "wind_direction":"东南风","wind_power":"2", ...},
+ *            "forecast_24h":{"0":{"max_degree":"33","min_degree":"26", ...}, ...}},
+ *    "message":"OK","status":200}
+ * 只挑要下发给呼机的那几个字段，某个字段解析不到就跳过，
+ * 不至于因为一个字段变了整条天气都推不出去。
+ * ------------------------------------------------------------------- */
+static bool wxParseTencent(const String& body, String* err) {
+  String st = jval(body, "status");                  // 数值型，200 才是正常
+  if (st.length() && st != "200" && st != "0") { if (err) *err = "腾讯天气返回 status=" + st; return false; }
+
+  int p = body.indexOf("\"observe\":");
+  if (p < 0) { if (err) *err = "腾讯天气没返回实况数据，检查省/市/区县名是否写对"; return false; }
+
+  String t  = jval(body, "degree", p);
+  String c  = jval(body, "weather", p);
+  String h  = jval(body, "humidity", p);
+  String wd = jval(body, "wind_direction", p);
+  String wp = jval(body, "wind_power", p);
+  if (!t.length() && !c.length()) { if (err) *err = "腾讯天气返回异常（省/市/区县名有误？）"; return false; }
+
+  if (t.length()) wx.temp = (int)lroundf(t.toFloat());
+  if (h.length()) wx.hum  = (int)h.toInt();
+  wx.cond = c;
+  // 风向有时给文字（东南风），有时给 1~8 的方位码，两种都认
+  if (wd.length()) {
+    if (isdigit((unsigned char)wd[0])) {
+      static const char* d8[8] = { "北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风" };
+      int d = wd.toInt();
+      if (d >= 1 && d <= 8) wx.windDir = String(d8[(d - 1) & 7]);
+    } else wx.windDir = wd;
+  }
+  if (wp.length()) wx.lvl = (int)wp.toInt();
+
+  // 今日最高/最低温：forecast_24h 的第 0 段就是当天
+  int q = body.indexOf("\"forecast_24h\":");
+  if (q >= 0) {
+    String hi = jval(body, "max_degree", q);
+    String lo = jval(body, "min_degree", q);
+    if (hi.length()) wx.hi = (int)lroundf(hi.toFloat());
+    if (lo.length()) wx.lo = (int)lroundf(lo.toFloat());
+  }
+  return true;
+}
+
 bool fetchWx(String* err) {
   if (WiFi.status() != WL_CONNECTED) { if (err) *err = "Wifi 未连接，请先在“配置 Wifi”里连上可上网的路由器"; return false; }
 
   String url;
-  if (cfg.wxSrc == 0) {                                    // Open-Meteo（免 Key）
+  if (cfg.wxSrc == 0) {                                    // 腾讯天气（免 Key，默认）
+    String s = String(cfg.wxCity);
+    s.replace("\xef\xbc\x8c", ",");                        // 中文逗号也认：广西，南宁 → 广西,南宁
+    String prov = s, city, county;
+    int c1 = s.indexOf(',');
+    if (c1 < 0) { if (err) *err = "腾讯天气要填“省,市,区县”，例如 广西,南宁,青秀区（区县可留空）"; return false; }
+    city = s.substring(c1 + 1);
+    prov = s.substring(0, c1);
+    int c2 = city.indexOf(',');
+    if (c2 >= 0) { county = city.substring(c2 + 1); city = city.substring(0, c2); }
+    prov.trim(); city.trim(); county.trim();
+    if (!prov.length() || !city.length()) { if (err) *err = "腾讯天气至少要填“省,市”，例如 广西,南宁"; return false; }
+    url = "https://wis.qq.com/weather/common?source=pc" +
+          String("&weather_type=observe%7Cforecast_24h") +  // %7C = |，实况 + 当日预报
+          "&province=" + urlEnc(prov) +
+          "&city=" + urlEnc(city) +
+          "&county=" + urlEnc(county);
+  } else {                                                 // Open-Meteo（免 Key，境外服务器）
     String city = String(cfg.wxCity);
     int c = city.indexOf(',');
-    if (c < 0) { if (err) *err = "免 Key 源需要填“纬度,经度”，例如 22.8170,108.3665"; return false; }
+    if (c < 0) { if (err) *err = "Open-Meteo 需要填“纬度,经度”，例如 22.8170,108.3665"; return false; }
     url = "https://api.open-meteo.com/v1/forecast?latitude=" + urlEnc(city.substring(0, c)) +
           "&longitude=" + urlEnc(city.substring(c + 1)) +
           "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m" +
           "&timezone=Asia%2FShanghai";
-  } else if (cfg.wxSrc == 1) {                             // 心知天气
-    if (!strlen(cfg.wxKey)) { if (err) *err = "心知天气需要填 API Key"; return false; }
-    url = "https://api.seniverse.com/v3/weather/now.json?key=" + urlEnc(String(cfg.wxKey)) +
-          "&location=" + urlEnc(String(cfg.wxCity)) + "&language=zh-Hans&unit=c";
-  } else {                                                 // 和风天气
-    if (!strlen(cfg.wxKey)) { if (err) *err = "和风天气需要填 API Key"; return false; }
-    url = "https://devapi.qweather.com/v7/weather/now?key=" + urlEnc(String(cfg.wxKey)) +
-          "&location=" + urlEnc(String(cfg.wxCity));
   }
 
   WiFiClientSecure client;
@@ -1645,45 +2033,28 @@ bool fetchWx(String* err) {
   http.end();
 
   wx = Wx();
-  if (cfg.wxSrc == 0) {
-    int p = body.indexOf("\"current\":");                  // 跳过 current_units 里的同名字段
+  bool ok;
+  if (cfg.wxSrc == 0) {                                   // 腾讯天气（免 Key）
+    ok = wxParseTencent(body, err);
+  } else {                                                // Open-Meteo（免 Key）
+    int p = body.indexOf("\"current\":");                 // 跳过 current_units 里的同名字段
     if (p < 0) p = 0;
     String t = jval(body, "temperature_2m", p);
     String h = jval(body, "relative_humidity_2m", p);
     String w = jval(body, "weather_code", p);
     String s = jval(body, "wind_speed_10m", p);
     String d = jval(body, "wind_direction_10m", p);
-    if (!t.length()) { if (err) *err = "返回数据里没有温度字段"; return false; }
-    wx.temp = (int)lroundf(t.toFloat());
-    if (h.length()) wx.hum  = (int)h.toInt();
-    wx.cond = String(wmoText(w.length() ? w.toInt() : -1));
-    if (s.length()) wx.lvl = beaufort(s.toFloat());
-    if (d.length()) wx.windDir = String(degToDir(d.toFloat()));
-  } else if (cfg.wxSrc == 1) {
-    String t = jval(body, "temperature");
-    String x = jval(body, "text");
-    if (!t.length() && !x.length()) { if (err) *err = "心知天气返回异常（Key 或城市名有误？）"; return false; }
-    if (t.length()) wx.temp = (int)lroundf(t.toFloat());
-    wx.cond = x;
-    // 心知的返回里 location 排在 now 前面，结构为
-    //   {"results":[{"location":{"id":"...","name":"南宁",...},"now":{...}}]}
-    // 所以用 jval 取第一个 "name" 就是城市名。
-    wx.city = jval(body, "name");
-  } else {
-    String c  = jval(body, "code");
-    if (c.length() && c != "200") { if (err) *err = "和风返回 code=" + c; return false; }
-    String t  = jval(body, "temp");
-    String x  = jval(body, "text");
-    String h  = jval(body, "humidity");
-    String wd = jval(body, "windDir");
-    String ws = jval(body, "windScale");
-    if (!t.length() && !x.length()) { if (err) *err = "和风天气返回异常（Key 或 LocationID 有误？）"; return false; }
-    if (t.length()) wx.temp = (int)lroundf(t.toFloat());
-    if (h.length()) wx.hum = (int)h.toInt();
-    if (ws.length()) wx.lvl = (int)ws.toInt();
-    wx.cond = x;
-    wx.windDir = wd;
+    if (!t.length()) { if (err) *err = "返回数据里没有温度字段"; ok = false; }
+    else {
+      wx.temp = (int)lroundf(t.toFloat());
+      if (h.length()) wx.hum  = (int)h.toInt();
+      wx.cond = String(wmoText(w.length() ? w.toInt() : -1));
+      if (s.length()) wx.lvl = beaufort(s.toFloat());
+      if (d.length()) wx.windDir = String(degToDir(d.toFloat()));
+      ok = true;
+    }
   }
+  if (!ok) return false;
 
   wx.valid = true;
   wx.at = millis();
@@ -1732,6 +2103,9 @@ String buildWxText(bool numeric) {
   if (wx.cond.length()) { s += wx.cond; s += " "; }
   s += String(wx.temp);
   s += "℃";
+  if (wx.lo > -100 && wx.hi > -100) {                 // 当日最低~最高温（只有腾讯源会给）
+    s += " "; s += String(wx.lo); s += "~"; s += String(wx.hi); s += "℃";
+  }
   if (wx.hum >= 0) { s += " "; s += "湿度"; s += String(wx.hum); s += "%"; }
   if (wx.lvl >= 0) {
     s += " ";
@@ -1751,6 +2125,7 @@ int pushWx() {
   if (!numeric) utf8ToGbk(txt, gbk, sizeof(gbk));
   else if (txt.length() + 8 < sizeof(gbk)) strncpy(gbk, txt.c_str(), sizeof(gbk) - 1);
 
+  huntReset();                  // 同上
   int n = 0;
   char line[TX_LINE_MAX];
   for (uint8_t i = 0; i < PAGER_NUM; i++) {
@@ -1802,7 +2177,21 @@ void wxTick() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(50);
+#if DEBUG
+  // DBG 走 Serial1（TX 在 GPIO2），原版从没 begin() 过，等于调试信息全丢。
+  // 这里补上：把模块 GPIO2 接到 USB 转串口的 RX（GND 共地），115200 就能看到日志，
+  // 不会占用与 STM32 通讯的那一路串口。
+  Serial1.begin(115200);
+#endif
   delay(200);
+
+  // 本固件（程序 + 4 个页面的 gzip 数据 + LittleFS）需要 4MB 布局。
+  // Arduino 里请选：Flash Size = 4MB (FS:2MB OTA:~1019KB)，选 1MB 会编译不过。
+  // 这里再在串口留一行提示，换芯片/换模块时好排查。
+  DBG("[sys] flash %u MB, sketch %u KB, free %u KB\n",
+      ESP.getFlashChipRealSize() / 1024 / 1024,
+      ESP.getSketchSize() / 1024,
+      ESP.getFreeSketchSpace() / 1024);
 
   cfgLoad();
   apStart();
@@ -1822,6 +2211,7 @@ void loop() {
   receiveString();
   txPump();
   scanTick();
+  huntTick();       // 追码/追频：队列空了就补几条（不预生成，随时能停）
   staTick();        // 推进连接状态机（原版漏了它，导致状态永远停在「连接中」）
   staAutoTick();    // 掉线自动重连
 

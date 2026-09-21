@@ -4,7 +4,7 @@
  * 编译工具：Arduino（esp8266 core 2.7.x / 3.x 均可）
  *
  * 原始项目：359303303267/STM32_POCSAG_Transmit
- * 本文件在原版基础上重做：手机自适应、10 路群呼、天气推送、gzip 预压缩
+ * 本文件在原版基础上重做：手机自适应、5 路群呼、腾讯天气推送、gzip 预压缩
  * 原作者：小小小日天；本项目遵循 GPL 协议，仅供个人 DIY 研究，商用需授权
  ***************************************************************************/
 #ifndef _HTML_H_
@@ -22,8 +22,10 @@ typedef struct {
 } PageGz;
 
 extern const PageGz PAGE_INDEX;   // 单呼/直接发送页
-extern const PageGz PAGE_GROUP;   // 10 路群呼 + 天气推送页
+extern const PageGz PAGE_GROUP;   // 5 路群呼 + 天气推送页
 extern const PageGz PAGE_WIFI;   // Wifi 配置页
 extern const PageGz PAGE_UPDATE;   // 固件升级页
+extern const PageGz PAGE_HUNT;    // 追码 / 追频扫描页
+extern const PageGz PAGE_WEATHER;  // 天气推送页
 
 #endif
