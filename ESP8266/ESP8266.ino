@@ -47,13 +47,13 @@
 #define STA_SSID  ""              // 家里/单位路由器的名称，留空则只开 AP
 #define STA_PSK   ""              // 路由器密码
 
-#define ENABLE_OTA 0              // 0=隐藏固件升级页（导航不显示，/webupdate 返回 404）
+#define ENABLE_OTA 1              // 0=隐藏固件升级页（导航不显示，/webupdate 返回 404）
                                   // 1=恢复升级页（需要 OTA 时改成 1 重新编译烧一次）
 
 #define DEBUG 0                   // 置 1 可从串口看到调试信息（注：串口已与 STM32 共用）
 /* ==================================================== */
 
-#define FW_VER      "V2.1-4M-5CH"
+#define FW_VER      "V2.5-4M-5CH"
 #define PAGER_NUM   5             // 群呼路数：5 行表格（改这里网页行数会自动跟着变，别忘重新生成 html.c）
 #define TX_QUEUE    12            // 发送队列深度
 #define TX_LINE_MAX 260           // 单条串口命令最大长度（STM32 缓冲区 400 字节）
@@ -145,6 +145,9 @@ struct Hunt {
   char     rate  = 'H';
   char     phase = 'P';
   char     msg[HUNT_MSG_MAX + 4];
+  uint32_t fLast = 0;        // 最后入队的那条所在的频率（0.0001 MHz 为单位），停止时上报用
+  uint32_t aLast = 0;        // 同上：对应的地址码
+  bool     lastValid = false; // fLast/aLast 是否代表一次真实扫描（区别于未开始就停止）
 } hunt;
 
 /* ---------------- 天气 ---------------- */
@@ -812,7 +815,9 @@ void huntReset() {                       // 让位给普通群呼/单呼的进�
 
 void huntStop() {
   hunt.active = false;
-  hunt.total = 0; hunt.sent = 0; hunt.done = 0;
+  // 注意：不清 total/sent/done，也不清 fLast/aLast/lastValid。
+  // 清了的话前端 /status 就拿不到「停在哪个频点」了 —— 网页正是靠 hunt.total != 0
+  // 来判断该显示扫描进度而不是普通发送进度。total 会由下一次 huntStart 覆盖。
 }
 
 // 扫描每条之间要等多久：与群呼同一套估算，保证短消息也能发完整
@@ -859,6 +864,7 @@ bool huntStart(uint32_t f0, uint32_t f1, uint32_t step,
   hunt.msg[0] = 0;
   strncpy(hunt.msg, msg.c_str(), HUNT_MSG_MAX);
   hunt.msg[HUNT_MSG_MAX] = 0;
+  hunt.fLast = 0; hunt.aLast = 0; hunt.lastValid = false;
   hunt.active = true;
   txTotal = (t > 255) ? 255 : t;        // 复用现有进度条（单字节，超了就截断显示）
   DBG("[hunt] start f=%u.%04u..%u.%04u step %u, addr %u..%u, %u shots\n",
@@ -882,6 +888,8 @@ void huntTick() {
 
     if (!txEnqueue(freq, line, huntWaitMs())) return;   // 满了，下一轮再说
     hunt.sent++;
+    // 记住最后入队的那条：停止 / 扫完时上报给前端，否则网页只能显示「已停止扫描」而说不出停在哪
+    hunt.fLast = hunt.fCur; hunt.aLast = hunt.aCur; hunt.lastValid = true;
 
     // 地址先走完一轮，再进下一个频点（切频最贵，放外层）
     if (hunt.aCur >= hunt.aEnd) { hunt.aCur = hunt.aBeg; hunt.fCur += hunt.fStep; }
@@ -896,6 +904,7 @@ void huntTick() {
  * 用户看到的号码会比呼机实际响的那条超前十几条 —— 那这个功能就废了。
  * 所以直接读队列头 txq[qHead]，它就是此刻正在发射（或正要发射）的那条。 */
 void huntCurrent(char* freq, size_t fc, char* addr, size_t ac) {
+  (void)ac;       // 地址码固定 7 位，容量由调用方保证，此处无需使用
   freq[0] = 0; addr[0] = 0;
   if (qCount == 0) return;
   strncpy(freq, txq[qHead].freq, fc - 1);
@@ -1373,6 +1382,14 @@ void status_server() {
     huntCurrent(hf, sizeof(hf), ha, sizeof(ha));
     j += ",\"sc\":1,\"sf\":\"" + jsonEsc(String(hf)) +
          "\",\"sa\":\"" + jsonEsc(String(ha)) + "\"";
+    // 停止后（队列排空）仍要能说出停在哪：q 为 0 时 huntCurrent 已无队列可读，
+    // 此时改从记录下来的最后位置取。sf/sa 保持同一字段名，前端无需改判据。
+    if (!hunt.active && !qCount && hunt.lastValid) {
+      huntFreqStr(hunt.fLast, hf, sizeof(hf));
+      snprintf(ha, sizeof(ha), "%07u", (unsigned)hunt.aLast);
+      j += ",\"sf\":\"" + jsonEsc(String(hf)) + "\",\"sa\":\"" + jsonEsc(String(ha)) +
+           "\",\"stopped\":1";
+    }
   } else {
     j += ",\"sc\":0";
   }
