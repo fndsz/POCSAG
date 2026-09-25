@@ -307,7 +307,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
   <div class="card">
     <h2>升级前准备</h2>
     <ol class="steps">
-      <li><b>编译设置</b><span>工具 → Flash Size 选 <code>4MB (FS:2MB OTA:~1019KB)</code></span></li>
+      <li><b>编译设置</b><span>工具 → Flash Size 选 <code>4MB (FS:1MB OTA:~1019KB)</code>（推荐，程序区 3MB）</span></li>
       <li><b>导出固件</b><span>项目 → 导出已编译的二进制文件，得到 <code>.bin</code></span></li>
       <li><b>选对文件</b><span>必须是程序 bin（约 400~700 KB），<b>不是</b> 4MB 整片镜像</span></li>
       <li><b>上传</b><span>选好文件后点「开始升级」，等待进度跑完并提示成功</span></li>
@@ -322,6 +322,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
       <input type="file" name="update" id="file" accept=".bin">
       <button type="submit" id="btn">开始升级</button>
     </form>
+    <div class="fileinfo" style="display:block">本页面版本: <b>PGFIX4</b> (看不到这行 = 浏览器用了缓存的旧页面, 按 Ctrl+F5 强制刷新) | 自更新硬性要求: 上方「可用程序空间」必须大于「Sketch 已用」, 否则只能串口烧录</div>
     <div class="fileinfo" id="finfo"></div>
     <div id="bar"><i></i></div>
     <div id="txt"></div>
@@ -381,7 +382,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 })();
 function $(id){return document.getElementById(id);}
 
-var CFG=null, OLD_BUILD="";
+var CFG=null, OLD_BUILD="", OLD_BOOTN=0;
 
 /* ---------- ESP8266 固件头解析 ----------
    前 4 字节：E9 / 段数 / Flash 模式 / (Flash容量<<4 | 频率)
@@ -406,6 +407,10 @@ function loadInfo(){
     $("i_uptime").textContent=c.time||"-";
     $("i_net").textContent=(c.sta?("已连接 · "+c.ssid):"未连接")+(c.rssi?" · "+c.rssi+" dBm":"");
     OLD_BUILD=c.build||"";
+    // 启动次数（设备侧存在 RTC memory 里，软件重启后保留）。
+    // 它比 build 字符串可靠：重复刷同一份 bin 时 build 一模一样，
+    // 只有 bootn 能证明「设备确实重启过」。
+    if(c.bootn) OLD_BOOTN=c.bootn;
     var tg=$("tag"); if(tg&&c.fw) tg.textContent=c.fw;
     if(c.otapend){ setTxt("⏳ 上次升级尚未完成重启，请稍候...","bad"); $("btn").disabled=true; }
   }).catch(function(){
@@ -443,7 +448,7 @@ $("file").addEventListener("change",function(){
         if(CFG&&CFG.flashb&&info.sizeMB&&Math.abs(info.sizeMB-CFG.flashb/1048576)>0.01){
           info.ok=false;
           info.msg.push("这个固件是按 "+info.fsize+" Flash 编译的，但设备实际是 "+
-                        (CFG.flashb/1048576)+" MB，请先按 4MB (FS:2MB OTA:~1019KB) 重新编译");
+                        (CFG.flashb/1048576)+" MB，请先按 4MB（FS:1MB 或 FS:2MB 均可，别选 FS:3MB）重新编译");
         }
       }
     }
@@ -505,8 +510,14 @@ function waitBack(){
         clearInterval(pollT);pollT=null;
         setTxt("✓ 升级成功（新固件编译于 "+c.build+"），正在跳转...","ok");
         setTimeout(function(){location.href="/";},2500);
+      }else if(OLD_BOOTN&&c.bootn&&c.bootn!==OLD_BOOTN&&el>8000){
+        // 设备确实重启过（bootn 变了），但编译时间没变 ——
+        // 最大可能是「刷的就是刚烧进去的那一份」，属于正常，别报失败。
+        clearInterval(pollT);pollT=null;
+        setTxt("⚠ 设备已重启（第 "+c.bootn+" 次启动），但编译时间没变（"+c.build+"）。<br>若你导出的就是当前正在跑的那份 bin，这属于正常现象，固件其实已经刷进去了；<br>若你改过代码，请确认 Arduino 里重新编译过（构建时间会变）再导出。","");
+        $("btn").disabled=false;
       }else if(el>30000){
-        // 设备活着，但固件没换 —— 说明这次没刷进去
+        // 设备活着、也没重启过 —— 这次确实没刷进去
         clearInterval(pollT);pollT=null;
         setTxt("✗ 设备已恢复，但固件没有变化（编译时间仍是 "+c.build+"）。<br>可能是文件传坏了或写入失败，请重新导出 bin 再试；若反复失败请用串口烧录。","bad");
         $("btn").disabled=false;
@@ -530,6 +541,14 @@ $("fu").addEventListener("submit",function(e){
   if(!CUR){setTxt("请先选择 .bin 文件","bad");return;}
   if(!CUR.ok){setTxt("文件未通过校验，请看上方提示","bad");return;}
   var f=$("file").files[0];
+  // [FIX-1] 必须用 FormData 打包成 multipart/form-data 再发。
+  // 直接 xhr.send(f) 发的是裸二进制：ESP8266WebServer 只有在 Content-Type 以
+  // "multipart/" 开头时才会走 _parseForm()，才会去调用上传回调 UpdateProcess()。
+  // 裸 POST 时上传回调一次都不会被触发，固件一个字节都没写，
+  // 而响应函数照旧返回 OK，设备重启，网页最后只能报「固件没变化」。
+  var fd=new FormData();
+  var fn=(f.name||"firmware.bin").replace(/[^ -~]/g,"_");
+  fd.append("update", f, fn);
   $("bar").style.display="block";
   $("bar").firstChild.style.width="0%";
   $("btn").disabled=true;
@@ -559,7 +578,7 @@ $("fu").addEventListener("submit",function(e){
     setTxt("连接中断，正在确认设备状态...","");
     waitBack();
   };
-  xhr.send(f);
+  xhr.send(fd);
 });
 
 loadInfo();

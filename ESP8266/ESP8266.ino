@@ -5,7 +5,10 @@
  * 适用平台：ESP8266-01S 等模块（必须换成 4MB Flash 才能用本固件）
  * 编译工具：Arduino + esp8266 core 2.7.x / 3.x
  * 板卡配置：Generic ESP8266 Module
- *           Flash Size : 4MB (FS:2MB OTA:~1019KB)   ← 必须选这一项，选 1MB 会装不下
+ *           Flash Size : 4MB (FS:1MB OTA:~1019KB)   ← 推荐（程序区 3MB，OTA 余量最大）
+ *                        4MB (FS:2MB OTA:~1019KB)   ← 也可（程序区 2MB，够用）
+ *                        4MB (FS:3MB OTA:~512KB)    ← 禁用！程序区仅 1MB，627KB 固件 OTA 必失败
+ *                        选 1MB 会编译不过
  *           Flash Mode : QIO / DIO 均可
  *           SSL Support: All SSL ciphers (most compatible)   ← 天气推送要用到 HTTPS
  *
@@ -53,7 +56,7 @@
 #define DEBUG 0                   // 置 1 可从串口看到调试信息（注：串口已与 STM32 共用）
 /* ==================================================== */
 
-#define FW_VER      "V2.5-4M-5CH"
+#define FW_VER      "V3-4M-5CH"
 #define PAGER_NUM   5             // 群呼路数：5 行表格（改这里网页行数会自动跟着变，别忘重新生成 html.c）
 #define TX_QUEUE    12            // 发送队列深度
 #define TX_LINE_MAX 260           // 单条串口命令最大长度（STM32 缓冲区 400 字节）
@@ -66,6 +69,9 @@
 #define SCAN_SHOW     12          // 最多返回给网页的网络数（按信号强度取前几名）
 #define SCAN_TIMEOUT  20000       // 扫描超时保护，卡住就放弃
 #define OTA_FLUSH_MS  2000        // OTA 成功后，等多久再重启（留给 TCP 把响应发完）
+// Content-Length 是整个 multipart 包（固件 + 头部/边界开销），不是固件本身大小，
+// 判超时要留出这点余量，否则刚好能装下的固件会被误判成"太大"。
+#define OTA_MULTIPART_MARGIN 1024
 
 #define MYFS LittleFS
 
@@ -994,6 +1000,17 @@ void buildTxLine(char* out, size_t cap, uint8_t i, const String& msg) {
 
 void sendPage(const PageGz& p) {
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  // [FIX-3] 必须禁缓存。
+  // 页面是 gzip + PROGMEM 静态内容，URL 常年不变（/webupdate）。
+  // 原版不发任何缓存头，浏览器/手机 WebView 会用启发式缓存把旧页面
+  // 长期留在本地 —— 于是你换了 html.c、重烧了固件，浏览器打开还是旧页面，
+  // 仍然执行旧的 xhr.send(f) 裸二进制上传，故障 100% 复现，
+  // 看起来就像"修好了却没生效"。
+  // chunked + CONTENT_LENGTH_UNKNOWN 也没有 ETag/Last-Modified 可校验，
+  // 只能靠 Cache-Control 硬性禁止。
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "0");
   if (p.gz) server.sendHeader("Content-Encoding", "gzip");
   server.send(200, "text/html; charset=GB18030", "");
   size_t off = 0;
@@ -1452,6 +1469,30 @@ bool otaBeginWrite() {
   return true;
 }
 
+/* 启动次数计数器（放在 RTC memory 里）。
+ *
+ * 为什么需要它：升级页在上传完成后靠 /cfg 的 build（__DATE__ __TIME__）判断
+ * "新固件到底跑起来了没有"。但如果你导出的是刚才串口烧进去的那一份 bin，
+ * 两次编译时间完全相同 —— 设备其实刷成功了，页面却报
+ * 「设备已恢复，但固件没变化」，让人白紧张一场，甚至反复重刷。
+ *
+ * RTC memory 在 ESP.restart()（软件重启）后仍然保留，正好可以用作
+ * "设备确实重启过"的独立证据：bootn 变了 = 一定重启过。
+ * 掉电会清零，但 OTA 走的是软件重启，不受影响。
+ */
+static uint32_t bootCount = 0;
+
+void bootCountInit() {
+  uint32_t n = 0;
+  // 注意：RTC memory 掉电/校验失败会读不出或读到垃圾值，这里做合法性兜底
+  if (ESP.rtcUserMemoryRead(0, &n, sizeof(n)) && n > 0 && n < 0xFFFFFFF0) {
+    bootCount = n + 1;
+  } else {
+    bootCount = 1;
+  }
+  ESP.rtcUserMemoryWrite(0, &bootCount, sizeof(bootCount));
+}
+
 void cfg_server() {
   String j = "{\"pg\":[";
   for (uint8_t i = 0; i < PAGER_NUM; i++) {
@@ -1525,6 +1566,14 @@ void cfg_server() {
   j += ",\"freesp\":" + String((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000);
   j += ",\"flashb\":" + String(real);
   j += ",\"otapend\":" + String(otaRebootAt ? 1 : 0);
+  // ESP8266 的 iROM 映射决定了：运行的固件 + 待写入的新固件 必须挤在同一块
+  // 1MB 的程序区里，boot 指针切换后旧的才作废。所以自更新的前提是
+  //   剩余空间 >= 当前固件大小
+  // 固件一旦超过程序区的一半（约 512KB），无论前端怎么修，OTA 在数学上
+  // 都不可能成功 —— 这类失败必须提前告诉用户，而不是让他反复试。
+  j += ",\"bootn\":" + String(bootCount);   // 启动次数：升级页用它判断设备是否真的重启过
+  j += ",\"otaself\":" + String((freeSp > sz + 0x1000) ? 1 : 0);
+  j += ",\"otaneed\":" + String(sz / 1024);
   j += ",\"fs\":\"" + (hasFs ? String(fsi.usedBytes / 1024) + " KB / " + String(fsi.totalBytes / 1024) + " KB" : "-") + "\"";
   j += "}";
   server.send(200, "application/json; charset=utf-8", j);
@@ -1553,11 +1602,28 @@ void cfg_server() {
 // 上传结束后的响应。单独拎出来，便于测试直接调用。
 void otaReply() {
   server.sendHeader("Connection", "close");
-  bool ok = !Update.hasError() && !otaRejected && otaMsg.length() == 0;
-  // 响应正文带上原因（成功时是 OK），前端直接显示
-  server.send(200, "text/plain; charset=utf-8",
-              ok ? String("OK")
-                 : (otaMsg.length() ? otaMsg : String(otaErrText(Update.getError()))));
+  // [FIX-2] 必须同时满足：真的收到过数据、真的开写过、真的成功收尾。
+  // 少了 otaStarted / otaGotData，只要上传回调压根没被触发（请求不是
+  // multipart/form-data、或选了个空文件），这里三个条件依旧全绿，
+  // 于是照常返回 OK 并重启 —— 现象就是「网页提示成功，重启后固件版本没变」。
+  bool ok = !Update.hasError() && !otaRejected && otaMsg.length() == 0
+            && otaStarted && otaGotData;
+  // 响应正文带上原因（成功时是 OK），前端直接显示。
+  // [FIX-4] 兜底文案：失败但 otaMsg 为空时，原版会回 "没有错误"（因为
+  // Update.getError() 压根没被设置过），前端就显示「升级失败：没有错误」，
+  // 完全看不出到底哪里错了。这里按状态给出真正的原因。
+  String resp;
+  if (ok) {
+    resp = "OK";
+  } else if (otaMsg.length()) {
+    resp = otaMsg;
+  } else if (!otaStarted) {
+    resp = "没有收到固件数据：上传回调未触发。通常是请求不是 multipart/form-data、"
+           "或文件为空。请确认页面是新版的（Ctrl+F5 强制刷新）后重试";
+  } else {
+    resp = String(otaErrText(Update.getError()));
+  }
+  server.send(200, "text/plain; charset=utf-8", resp);
   // 关键：不在这里重启。留给 loop() 延后执行，好让 lwIP 有时间把响应发出去。
   if (ok) otaRebootAt = millis() + OTA_FLUSH_MS;
 }
@@ -1576,19 +1642,35 @@ void UpdateProcess() {
 
     otaMaxSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
 
-    // 关键①：写之前先卡大小。Content-Length 是整包，含 multipart 头部开销，
-    // 留 2KB 余量估算，宁可误拦也不要写越界。
-    String cl = server.header("Content-Length");
-    if (cl.length()) {
-      long total = atol(cl.c_str());
-      if (total > 0 && (uint32_t)total > otaMaxSpace) {
-        otaRejected = true;
-        otaMsg = "固件太大：收到 " + String((uint32_t)total / 1024) + " KB，"
-                 "可用空间只有 " + String(otaMaxSpace / 1024) + " KB。"
-                 "OTA 只能传 Arduino「导出已编译的二进制文件」得到的程序 bin，"
-                 "不能传打包脚本合成的整片 Flash 镜像（那个必须用串口烧录）";
-        DBG("[ota] rejected: %ld > %u\n", total, otaMaxSpace);
-      }
+    /* 关键⓪：这里曾经有一版用 server.header("Content-Type") 判断
+     * "是不是 multipart" 的错误写法，结果把每一次上传都拒了 —— 报错正是
+     * 「Content-Type 不是 multipart/form-data（实际是“(空)”）」。
+     *
+     * 根因：ESP8266WebServer 的 header() 只对 collectHeaders() 注册过的
+     * 名字生效（默认只认 Authorization），未注册的头一律返回空串。
+     * 所以 server.header("Content-Type") 永远拿到空，判断必然误判。
+     *
+     * 而这个检查本身就是多余的：上传回调 UpdateProcess() 只在
+     * _parseForm() 里被调用，能跑到这里就说明请求已经是 multipart 了。
+     * 真正需要防的「不是 multipart」由 otaReply() 里的 otaStarted 兜住
+     * （回调没触发 -> 没开写 -> 不返回 OK、不重启）。
+     */
+
+    // 关键①：写之前先卡大小。
+    // 用 upload.contentLength（core 在 _parseForm 里从 Content-Length 填好），
+    // 别再用 server.header("Content-Length") —— 那条同样拿不到值，
+    // 原来的大小检查其实一直没生效（cl.length() 恒为 0，整段被跳过）。
+    // contentLength 是整包大小（固件 + multipart 头部/边界开销），
+    // 留 OTA_MULTIPART_MARGIN 余量，宁可误拦也不要写越界。
+    uint32_t total = upload.contentLength;
+    if (total > 0 && total > otaMaxSpace + OTA_MULTIPART_MARGIN) {
+      otaRejected = true;
+      otaMsg = "固件太大：收到 " + String(total / 1024) + " KB，"
+               "可用空间只有 " + String(otaMaxSpace / 1024) + " KB。"
+               "（当前固件已占 " + String(ESP.getSketchSize() / 1024) + " KB）"
+               "OTA 只能传 Arduino「导出已编译的二进制文件」得到的程序 bin，"
+               "不能传打包脚本合成的整片 Flash 镜像（那个必须用串口烧录）";
+      DBG("[ota] rejected: %u > %u\n", total, otaMaxSpace);
     }
     // 注意：这里【不】调用 Update.begin()。
     // 见下面的 otaBeginWrite() —— 推迟到真的收到数据时才开写。
@@ -1602,6 +1684,20 @@ void UpdateProcess() {
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Update.printError(Serial);
     }
+    return;
+  }
+
+  // 浏览器取消 / 网络中断：Updater 还占着（_size > 0），必须复位，
+  // 否则这次之后 Update.begin() 一律返回 "already running"，
+  // 不重启就再也刷不了第二次。
+  if (upload.status == UPLOAD_FILE_ABORTED) {
+    if (otaStarted) {
+      // 注意：core 2.7.x 和 3.x 都没有 Update.abort()，别去调它。
+      // end(false) 在没写完时会内部 _reset()，把 Updater 恢复到可用状态。
+      Update.end(false);
+      MYFS.begin();                  // 文件系统挂回去，配置读写不受影响
+    }
+    otaMsg = "上传被中断，本次没有写入固件";
     return;
   }
 
@@ -2203,7 +2299,8 @@ void setup() {
   delay(200);
 
   // 本固件（程序 + 4 个页面的 gzip 数据 + LittleFS）需要 4MB 布局。
-  // Arduino 里请选：Flash Size = 4MB (FS:2MB OTA:~1019KB)，选 1MB 会编译不过。
+  // Arduino 里请选：Flash Size = 4MB (FS:1MB OTA:~1019KB) 或 4MB (FS:2MB OTA:~1019KB)。
+  // 别选 4MB (FS:3MB OTA:~512KB)：程序区只剩 1MB，本固件 627KB 时 OTA 会直接失败。
   // 这里再在串口留一行提示，换芯片/换模块时好排查。
   DBG("[sys] flash %u MB, sketch %u KB, free %u KB\n",
       ESP.getFlashChipRealSize() / 1024 / 1024,
@@ -2211,6 +2308,7 @@ void setup() {
       ESP.getFreeSketchSpace() / 1024);
 
   cfgLoad();
+  bootCountInit();
   apStart();
   MDNS.begin("esp8266");
   serverRoutes();
