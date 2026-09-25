@@ -7,7 +7,7 @@
 | 选项 | 设置值 |
 |------|--------|
 | 开发板 | Generic ESP8266 Module |
-| Flash Size | **4MB (FS:2MB OTA:~1019KB)** ← 必须选这项 |
+| Flash Size | **4MB (FS:1MB OTA:~1019KB)** ← 必须选这项 |
 | Flash Mode | QIO / DIO 均可 |
 | CPU Frequency | 80 MHz |
 | Flash Frequency | 40 MHz |
